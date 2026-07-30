@@ -8,7 +8,7 @@
 
 import { useState } from 'react'
 import { LayoutDashboard, BookOpen, Clock, Settings, BarChart3, ChevronLeft, Menu } from 'lucide-react'
-import { useLayout } from '../App'
+
 import type { NavMode } from '../engine/layoutEngine'
 import type { Screen } from '../App'
 

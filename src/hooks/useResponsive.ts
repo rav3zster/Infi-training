@@ -43,16 +43,6 @@ export interface ResponsiveState {
   isPortrait: boolean
 }
 
-function readSafeArea(name: string): number {
-  if (typeof getComputedStyle === 'undefined') return 0
-  const dummy = document.createElement('div')
-  dummy.style.cssText = `position:fixed;${name}:env(${name},0px);pointer-events:none;opacity:0`
-  document.body.appendChild(dummy)
-  const value = parseFloat(getComputedStyle(dummy)[name as any] as string) || 0
-  document.body.removeChild(dummy)
-  return value
-}
-
 export function useResponsive(): ResponsiveState {
   const [state, setState] = useState<ResponsiveState>(() => {
     if (typeof window === 'undefined') {
@@ -75,13 +65,7 @@ export function useResponsive(): ResponsiveState {
 
     const w = window.innerWidth
     const h = window.innerHeight
-    const layout = computeLayout(
-      w, h,
-      readSafeArea('safe-area-inset-top'),
-      readSafeArea('safe-area-inset-bottom'),
-      readSafeArea('safe-area-inset-left'),
-      readSafeArea('safe-area-inset-right'),
-    )
+    const layout = computeLayout(w, h)
 
     return {
       layout,
@@ -102,13 +86,7 @@ export function useResponsive(): ResponsiveState {
   const handleResize = useCallback(() => {
     const w = window.innerWidth
     const h = window.innerHeight
-    const layout = computeLayout(
-      w, h,
-      readSafeArea('safe-area-inset-top'),
-      readSafeArea('safe-area-inset-bottom'),
-      readSafeArea('safe-area-inset-left'),
-      readSafeArea('safe-area-inset-right'),
-    )
+    const layout = computeLayout(w, h)
 
     setState({
       layout,

@@ -55,12 +55,6 @@ export default function DashboardScreen() {
     return `${hours}h ${minutes}m`
   }
 
-  // Hero section: progress circle column = 2 if wide, else full width
-  const heroCircleSpan = layout.isWide ? 'col-span-2' : 'col-span-1'
-  const heroStatsCols = layout.isWide
-    ? `grid grid-cols-${Math.min(layout.columns + 1, 3)}`
-    : 'grid grid-cols-2 sm:grid-cols-3'
-
   return (
     <div className="space-y-5 sm:space-y-6"
       style={{ gap: `${layout.sectionGap}px` }}

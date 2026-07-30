@@ -59,29 +59,10 @@ export interface LayoutInfo {
   /** Progress bar height in px */
   progressBarHeight: number
 
-  // ── Typography (scale factor relative to 16px base) ──
-  typographyScale: number
-  /** Hero text rem */
-  textHero: string
-  /** H1 text rem */
-  textH1: string
-  /** Body text rem */
-  textBody: string
-  /** Small text rem */
-  textSmall: string
-  /** Data/value text rem */
-  textData: string
-  /** Tiny/caption text rem */
-  textTiny: string
-
   // ── Icon scale (base = 1.0) ──
   iconScale: number
-
-  // ── Safe area insets (px) — populated by hook from CSS env() ──
-  safeAreaTop: number
-  safeAreaBottom: number
-  safeAreaLeft: number
-  safeAreaRight: number
+  /** Typography scale factor (base = 1.0) */
+  typographyScale: number
 
   // ── Derived booleans ──
   isCompact: boolean
@@ -103,10 +84,6 @@ export interface LayoutInfo {
 export function computeLayout(
   width: number,
   height: number,
-  safeAreaTop = 0,
-  safeAreaBottom = 0,
-  safeAreaLeft = 0,
-  safeAreaRight = 0,
 ): LayoutInfo {
   const orientation: Orientation = width > height ? 'landscape' : 'portrait'
   const profile = getProfile(width)
@@ -211,8 +188,6 @@ export function computeLayout(
     columns = 2
   }
 
-  const textBase = `${(typographyScale * 1).toFixed(4)}rem`
-
   return {
     profile,
     width,
@@ -236,18 +211,7 @@ export function computeLayout(
     progressBarHeight,
 
     typographyScale,
-    textHero: `${(typographyScale * 1.75).toFixed(4)}rem`,
-    textH1: `${(typographyScale * 1.25).toFixed(4)}rem`,
-    textBody: `${(typographyScale * 0.875).toFixed(4)}rem`,
-    textSmall: `${(typographyScale * 0.75).toFixed(4)}rem`,
-    textData: `${(typographyScale * 1.5).toFixed(4)}rem`,
-    textTiny: `${(typographyScale * 0.625).toFixed(4)}rem`,
-
     iconScale,
-    safeAreaTop,
-    safeAreaBottom,
-    safeAreaLeft,
-    safeAreaRight,
 
     isCompact,
     isComfortable,
