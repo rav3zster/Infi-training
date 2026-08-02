@@ -44,7 +44,7 @@ export default function AchievementsPanel({ achievements }: AchievementsPanelPro
 
       {/* Achievement cards */}
       <div className="space-y-1.5 max-h-[280px] overflow-y-auto pr-1">
-        {(showAll ? achievements : achievements.filter(a => !a.unlocked)).map(a => {
+        {displayAchievements.map(a => {
           const IconComponent = ICON_MAP[a.icon] || Award
           const progress = a.requirement > 0
             ? Math.min((a.current / a.requirement) * 100, 100)
@@ -102,7 +102,7 @@ export default function AchievementsPanel({ achievements }: AchievementsPanelPro
       </div>
 
       {/* Toggle button */}
-      {displayAchievements.length === 0 && (
+      {showAll && achievements.some(a => a.unlocked) && (
         <button
           type="button"
           onClick={() => setShowAll(false)}

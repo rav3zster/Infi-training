@@ -1,8 +1,9 @@
 import { useState, createContext, useContext } from 'react'
 import { ThemeProvider } from './context/ThemeContext'
+import { ConfirmProvider } from './context/ConfirmContext'
 import { TrainingProvider } from './context/TrainingContext'
+import { TimerProvider } from './context/TimerContext'
 import AdaptiveNavigation from './components/AdaptiveNavigation'
-import ToastContainer from './components/ToastContainer'
 import { useResponsive } from './hooks/useResponsive'
 import type { LayoutInfo } from './engine/layoutEngine'
 import DashboardScreen from './screens/DashboardScreen'
@@ -22,18 +23,9 @@ export function useLayout() {
   return ctx
 }
 
-/** Legacy hook — returns the full responsive state (deprecated, prefer useLayout) */
-export function useResponsiveCtx() {
-  const layout = useLayout()
-  return {
-    layout,
-    navMode: layout.navMode,
-    breakpoint: layout.profile,
-    isMobile: !layout.isSpacious,
-    isTablet: layout.isComfortable || layout.isExpanded,
-    isDesktop: layout.isUltra || layout.isExpanded,
-  }
-}
+/**
+ * AdaptiveNavigation — Responsive navigation component.
+ */
 
 function AppRouter() {
   const [currentScreen, setCurrentScreen] = useState<Screen>('dashboard')
@@ -79,8 +71,6 @@ function AppRouter() {
           {currentScreen === 'analytics' && <AnalyticsScreen />}
           {currentScreen === 'presets' && <PresetsScreen />}
         </main>
-
-        <ToastContainer />
       </div>
     </LayoutCtx.Provider>
   )
@@ -89,9 +79,13 @@ function AppRouter() {
 export default function App() {
   return (
     <ThemeProvider>
-      <TrainingProvider>
-        <AppRouter />
-      </TrainingProvider>
+      <ConfirmProvider>
+        <TrainingProvider>
+          <TimerProvider>
+            <AppRouter />
+          </TimerProvider>
+        </TrainingProvider>
+      </ConfirmProvider>
     </ThemeProvider>
   )
 }

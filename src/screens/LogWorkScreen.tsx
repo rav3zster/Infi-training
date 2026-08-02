@@ -1,10 +1,12 @@
 import { useMemo } from 'react'
 import { useTheme } from '../context/ThemeContext'
 import { useTraining } from '../context/TrainingContext'
+import { useConfirm } from '../context/ConfirmContext'
 import { useLayout } from '../App'
 import TimeLogger from '../components/TimeLogger'
 import { Sun, Moon, Clock, RotateCcw, History } from 'lucide-react'
 import type { DailyLogEntry } from '../types'
+import { formatDate } from '../data/curriculum'
 
 function SessionHistoryTable({ logs }: { logs: DailyLogEntry[] }) {
   const groupedLogs = useMemo(() => {
@@ -34,7 +36,9 @@ function SessionHistoryTable({ logs }: { logs: DailyLogEntry[] }) {
           {groupedLogs.map(([date, entries]) => {
             const dateObj = new Date(date + 'T00:00:00')
             const formattedDate = dateObj.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
-            const isToday = date === new Date().toISOString().slice(0, 10)
+            // Compare using local dates (formatDate) — toISOString() is UTC and
+            // would mislabel today in non-UTC timezones.
+            const isToday = date === formatDate(new Date())
             const dayTotal = entries.reduce((s, e) => s + e.hours, 0)
             return (
               <div key={date}>
@@ -65,7 +69,8 @@ function SessionHistoryTable({ logs }: { logs: DailyLogEntry[] }) {
 
 export default function LogWorkScreen() {
   const { isDark, toggleTheme } = useTheme()
-  const { data, metrics, resetData } = useTraining()
+  const { data, metrics, resetLogs } = useTraining()
+  const confirm = useConfirm()
   const layout = useLayout()
 
   return (
@@ -82,7 +87,7 @@ export default function LogWorkScreen() {
             <div className="r-text-tiny text-text-secondary">Target: {metrics.adaptiveDailyTarget.toFixed(1)}h</div>
           </div>
           <button onClick={toggleTheme} className="relative w-12 h-6 rounded-full border border-border-color bg-bg-primary cursor-pointer hover:border-text-secondary flex-shrink-0">
-            <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-text-primary flex items-center justify-center transition-all duration-200 ${isDark ? 'translate-x-6' : 'translate-x-0.5'}`}>
+            <span className={`absolute top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-text-primary flex items-center justify-center transition-all duration-200 ${isDark ? 'translate-x-6' : 'translate-x-0.5'}`}>
               {isDark ? <Moon size={10} className="text-bg-primary" /> : <Sun size={10} className="text-bg-primary" />}
             </span>
           </button>
@@ -104,8 +109,16 @@ export default function LogWorkScreen() {
       {/* Footer */}
       <footer className="flex items-center justify-between pt-4 border-t border-border-color">
         <span className="r-text-tiny text-text-secondary">{data.dailyLogs.length} total sessions</span>
-        <button type="button" onClick={() => { if (window.confirm('Reset all training data?')) resetData() }}
-          className="flex items-center gap-1 r-text-tiny text-text-secondary hover:text-text-primary transition-colors cursor-pointer"><RotateCcw size={10} /> Reset Data</button>
+        <button type="button" onClick={async () => {
+          const ok = await confirm({
+            title: 'Clear all study logs?',
+            message: 'All logged sessions will be removed. Your curriculum progress will be kept.',
+            confirmLabel: 'Clear Logs',
+            danger: true,
+          })
+          if (ok) resetLogs()
+        }}
+          className="flex items-center gap-1 r-text-tiny text-text-secondary hover:text-text-primary transition-colors cursor-pointer"><RotateCcw size={10} /> Clear Logs</button>
       </footer>
     </div>
   )

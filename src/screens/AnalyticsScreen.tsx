@@ -1,7 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { useTheme } from '../context/ThemeContext'
 import { useTraining } from '../context/TrainingContext'
+import { useConfirm } from '../context/ConfirmContext'
 import { useLayout } from '../App'
+import AnalyticsGrid from '../components/AnalyticsGrid'
 import {
   Sun, Moon, RotateCcw, BarChart3, TrendingUp,
   Clock, Calendar, Target, BrainCircuit,
@@ -90,9 +92,9 @@ function WeeklyBarChart({ logs }: { logs: { date: string; hours: number }[] }) {
 
 export default function AnalyticsScreen() {
   const { isDark, toggleTheme } = useTheme()
-  const { data, metrics, resetData } = useTraining()
+  const { data, metrics, resetLogs } = useTraining()
+  const confirm = useConfirm()
   const layout = useLayout()
-  const [showReset, setShowReset] = useState(false)
 
   const monthlyHours = useMemo(() => {
     const months = new Map<string, number>()
@@ -149,12 +151,15 @@ export default function AnalyticsScreen() {
         <div className="flex items-center gap-3">
           <span className="r-text-tiny text-text-secondary hidden sm:block">{data.dailyLogs.length} sessions</span>
           <button onClick={toggleTheme} className="relative w-12 h-6 rounded-full border border-border-color bg-bg-primary cursor-pointer hover:border-text-secondary flex-shrink-0">
-            <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-text-primary flex items-center justify-center transition-all duration-200 ${isDark ? 'translate-x-6' : 'translate-x-0.5'}`}>
+            <span className={`absolute top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-text-primary flex items-center justify-center transition-all duration-200 ${isDark ? 'translate-x-6' : 'translate-x-0.5'}`}>
               {isDark ? <Moon size={10} className="text-bg-primary" /> : <Sun size={10} className="text-bg-primary" />}
             </span>
           </button>
         </div>
       </header>
+
+      {/* Hero analytics grid (progress, velocity, runway, streak, module mastery) */}
+      <AnalyticsGrid />
 
       {/* Stats grid — columns derived from layout.columns */}
       <section
@@ -269,15 +274,16 @@ export default function AnalyticsScreen() {
       {/* Footer */}
       <footer className="flex items-center justify-between pt-2 border-t border-border-color">
         <span className="r-text-tiny text-text-secondary">{data.dailyLogs.length} sessions</span>
-        {!showReset ? (
-          <button type="button" onClick={() => setShowReset(true)} className="flex items-center gap-1 r-text-tiny text-text-secondary hover:text-text-primary cursor-pointer"><RotateCcw size={10} /> Reset</button>
-        ) : (
-          <div className="flex items-center gap-2">
-            <span className="r-text-tiny text-red-500 dark:text-red-400 font-medium">Confirm?</span>
-            <button type="button" onClick={() => { resetData(); setShowReset(false) }} className="r-text-tiny text-red-500 hover:text-red-600 cursor-pointer">Yes</button>
-            <button type="button" onClick={() => setShowReset(false)} className="r-text-tiny text-text-secondary hover:text-text-primary cursor-pointer">Cancel</button>
-          </div>
-        )}
+        <button type="button" onClick={async () => {
+          const ok = await confirm({
+            title: 'Clear all study logs?',
+            message: 'All logged sessions will be removed. Your curriculum progress will be kept.',
+            confirmLabel: 'Clear Logs',
+            danger: true,
+          })
+          if (ok) resetLogs()
+        }}
+          className="flex items-center gap-1 r-text-tiny text-text-secondary hover:text-text-primary cursor-pointer"><RotateCcw size={10} /> Clear Logs</button>
       </footer>
     </div>
   )

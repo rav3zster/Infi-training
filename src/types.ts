@@ -23,6 +23,12 @@ export interface SubTopic {
   completed: boolean
   hoursSpent: number
   lastStudied: string
+  /**
+   * Complexity-based estimated study time for THIS atomic subtopic (minutes).
+   * Assigned per subtopic in the curriculum; never the same for every subtopic.
+   * Backfilled on load for data saved before this field existed.
+   */
+  baseEstimateMinutes?: number
 }
 
 export interface Topic {
@@ -63,6 +69,8 @@ export interface DailyLogEntry {
   subtopicId: string
   subtopicName: string
   hours: number
+  /** How this time was recorded: 'timer' (manual logging) or 'completion' (auto-credited on topic completion) */
+  source?: 'timer' | 'completion'
 }
 
 export interface StudySession {
@@ -76,6 +84,8 @@ export interface StudySession {
   subtopicName: string
   moduleName: string
   notes?: string
+  /** How this session was recorded: 'timer' or 'completion' */
+  source?: 'timer' | 'completion'
 }
 
 export interface TrainingData {
@@ -169,6 +179,8 @@ export interface DashboardMetrics {
 
   /** Total estimated hours of the entire curriculum */
   totalEstimatedHours: number
+  /** Personalized learning-speed factor (base × factor = current estimate) */
+  learningSpeedFactor: number
   /** Remaining estimated work (topics not completed lose their estimated hours) */
   remainingEstimatedWork: number
   /** Projected tomorrow's recommendation based on today's actual hours */

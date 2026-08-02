@@ -39,14 +39,14 @@ function MiniProgressBar({ value, height = 3 }: { value: number; height?: number
 
 export default function AnalyticsGrid() {
   const { metrics } = useTraining()
-  const { overallProgress, adaptiveDailyTarget, todayHours, remainingHours, daysRemaining, totalHoursSpent, totalSubtopics, completedSubtopics, streakDays, moduleAnalytics } = metrics
+  const { overallProgress, adaptiveDailyTarget, todayHours, remainingHours, daysRemaining, totalHoursSpent, totalEstimatedHours, totalSubtopics, completedSubtopics, streakDays, moduleAnalytics } = metrics
 
   const dailyVelocityPercent = adaptiveDailyTarget > 0
     ? Math.min((todayHours / adaptiveDailyTarget) * 100, 100)
     : todayHours > 0 ? 100 : 0
 
   const studyRunwayPercent = totalHoursSpent > 0
-    ? Math.min(totalHoursSpent / 100 * 100, 100)
+    ? Math.min((totalHoursSpent / totalEstimatedHours) * 100, 100)
     : 0
 
   // Find the module with highest mastery

@@ -1,5 +1,7 @@
 import { useTheme } from '../context/ThemeContext'
 import { useTraining } from '../context/TrainingContext'
+import { useTimer } from '../context/TimerContext'
+import { useConfirm } from '../context/ConfirmContext'
 import { useLayout } from '../App'
 import SmartProgressCircle from '../components/SmartProgressCircle'
 import ForecastCards from '../components/ForecastCards'
@@ -7,10 +9,12 @@ import RoadmapForecast from '../components/RoadmapForecast'
 import TimeDistribution from '../components/TimeDistribution'
 import AchievementsPanel from '../components/AchievementsPanel'
 import MotivationalInsights from '../components/MotivationalInsights'
+import ProductivityInsights from '../components/ProductivityInsights'
+import StudyHeatmap from '../components/StudyHeatmap'
 import {
   Sun, Moon, RotateCcw, Sparkles,
   Clock, TrendingUp, Target, Calendar,
-  Gauge, BarChart3, TrendingDown,
+  Gauge, BarChart3, TrendingDown, Timer,
 } from 'lucide-react'
 
 function StatCard({
@@ -41,18 +45,30 @@ function StatCard({
 
 export default function DashboardScreen() {
   const { isDark, toggleTheme } = useTheme()
-  const { metrics, resetData } = useTraining()
+  const { metrics, resetLogs } = useTraining()
+  const { timerRunning, timerElapsedSeconds } = useTimer()
+  const confirm = useConfirm()
   const layout = useLayout()
 
+  // Live today hours — includes the running timer's elapsed time
+  const liveTodayHours = metrics.todayHours + (timerRunning ? timerElapsedSeconds / 3600 : 0)
+
   const dailyVelocityPercent = metrics.adaptiveDailyTarget > 0
-    ? Math.min((metrics.todayHours / metrics.adaptiveDailyTarget) * 100, 100)
-    : metrics.todayHours > 0 ? 100 : 0
+    ? Math.min((liveTodayHours / metrics.adaptiveDailyTarget) * 100, 100)
+    : liveTodayHours > 0 ? 100 : 0
 
   const formatHours = (h: number) => {
     const hours = Math.floor(h); const minutes = Math.round((h - hours) * 60)
     if (hours === 0) return `${minutes}m`
     if (minutes === 0) return `${hours}h`
     return `${hours}h ${minutes}m`
+  }
+
+  const formatElapsed = (seconds: number) => {
+    const h = Math.floor(seconds / 3600)
+    const m = Math.floor((seconds % 3600) / 60)
+    if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`
+    return `${m}m ${String(seconds % 60).padStart(2, '0')}s`
   }
 
   return (
@@ -88,9 +104,16 @@ export default function DashboardScreen() {
         )}
 
         <div className="flex items-center gap-2 sm:gap-3">
+          {timerRunning && (
+            <span className="inline-flex items-center gap-1.5 r-text-tiny font-medium px-2.5 py-1 rounded-full
+              bg-text-primary text-bg-primary animate-pulse-soft">
+              <Timer size={10} className="text-bg-primary" />
+              {formatElapsed(timerElapsedSeconds)}
+            </span>
+          )}
           <button onClick={toggleTheme}
             className="relative w-12 h-6 rounded-full border border-border-color bg-bg-primary cursor-pointer hover:border-text-secondary transition-all duration-200 flex-shrink-0">
-            <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-text-primary flex items-center justify-center transition-all duration-200 ${isDark ? 'translate-x-6' : 'translate-x-0.5'}`}>
+            <span className={`absolute top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-text-primary flex items-center justify-center transition-all duration-200 ${isDark ? 'translate-x-6' : 'translate-x-0.5'}`}>
               {isDark ? <Moon size={10} className="text-bg-primary" /> : <Sun size={10} className="text-bg-primary" />}
             </span>
           </button>
@@ -98,8 +121,18 @@ export default function DashboardScreen() {
       </header>
 
       {/* ── Hero: Progress Circle + Stats ── */}
-      <section className={`grid grid-cols-1 ${layout.isComfortable ? 'sm:grid-cols-2' : ''} ${layout.isWide ? `lg:grid-cols-${layout.columns + 2}` : ''}`}
-        style={{ gap: `${layout.cardGap}px` }}
+      <section
+        className="grid grid-cols-1"
+        style={{
+          gap: `${layout.cardGap}px`,
+          // Inline gridTemplateColumns — Tailwind cannot build classes from
+          // runtime strings (lg:grid-cols-${n} would be purged at build time).
+          gridTemplateColumns: layout.isWide
+            ? `repeat(${layout.columns + 2}, minmax(0, 1fr))`
+            : layout.isComfortable
+              ? 'repeat(2, minmax(0, 1fr))'
+              : 'repeat(1, minmax(0, 1fr))',
+        }}
       >
         <div className={layout.isWide ? 'col-span-2' : ''}
           style={{
@@ -109,7 +142,7 @@ export default function DashboardScreen() {
           <div className="r-card flex flex-col items-center justify-center r-p-card">
             <SmartProgressCircle
               value={dailyVelocityPercent}
-              todayHours={metrics.todayHours}
+              todayHours={liveTodayHours}
               size={layout.isUltra ? 200 : layout.isExpanded ? 180 : layout.isComfortable ? 160 : 140}
               strokeWidth={8}
               label="today's progress"
@@ -120,7 +153,7 @@ export default function DashboardScreen() {
                 <span className="r-text-small text-text-secondary">recommended today</span>
               </div>
               <div className="flex items-center gap-3 justify-center mt-1.5 flex-wrap">
-                <span className="r-text-tiny text-text-secondary tabular-nums">{metrics.todayHours.toFixed(1)}h logged</span>
+                <span className="r-text-tiny text-text-secondary tabular-nums">{liveTodayHours.toFixed(1)}h logged</span>
                 <span className="text-text-secondary/30">·</span>
                 <span className="r-text-tiny text-text-secondary tabular-nums">{metrics.adaptiveDailyTarget.toFixed(1)}h target</span>
               </div>
@@ -128,7 +161,7 @@ export default function DashboardScreen() {
           </div>
         </div>
 
-        <div className={`grid gap-2 sm:gap-3 ${layout.isComfortable ? 'grid-cols-2' : 'grid-cols-2 sm:grid-cols-3'}`}
+        <div className={`grid gap-2 sm:gap-3 ${layout.isComfortable && !layout.isWide ? 'grid-cols-2' : 'grid-cols-2 sm:grid-cols-3'}`}
           style={{ gap: `${layout.cardGap}px` }}
         >
           <StatCard icon={Calendar} label="Remaining Days" value={String(metrics.daysRemaining)} sublabel="until joining" />
@@ -165,12 +198,30 @@ export default function DashboardScreen() {
           todayHours={metrics.todayHours} targetHours={metrics.adaptiveDailyTarget} />
       </section>
 
+      {/* ── Study Heatmap ── */}
+      <section>
+        <StudyHeatmap data={metrics.heatmapData} />
+      </section>
+
+      {/* ── Productivity Insights (Resume Learning, Assessments, Path, Module Heatmap) ── */}
+      <section>
+        <ProductivityInsights />
+      </section>
+
       {/* ── Footer ── */}
       <footer className="flex items-center justify-between pt-2 border-t border-border-color">
-        <span className="r-text-tiny text-text-secondary">v3.0 · {metrics.totalEstimatedHours.toFixed(0)}h curriculum</span>
-        <button type="button" onClick={() => { if (window.confirm('Reset all training data?')) resetData() }}
+        <span className="r-text-tiny text-text-secondary">v3.0 · {metrics.totalEstimatedHours.toFixed(0)}h curriculum · speed ×{metrics.learningSpeedFactor.toFixed(2)}</span>
+        <button type="button" onClick={async () => {
+          const ok = await confirm({
+            title: 'Clear all study logs?',
+            message: 'All logged sessions will be removed. Your curriculum progress will be kept.',
+            confirmLabel: 'Clear Logs',
+            danger: true,
+          })
+          if (ok) resetLogs()
+        }}
           className="flex items-center gap-1 r-text-tiny text-text-secondary hover:text-text-primary transition-colors cursor-pointer">
-          <RotateCcw size={10} /> Reset
+          <RotateCcw size={10} /> Clear Logs
         </button>
       </footer>
     </div>

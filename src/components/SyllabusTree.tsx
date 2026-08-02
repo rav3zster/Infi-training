@@ -16,6 +16,7 @@ import {
   HelpCircle,
 } from 'lucide-react'
 import { useTraining } from '../context/TrainingContext'
+import { formatDuration, formatHours, calculateSubTopicEstimateMinutes } from '../data/curriculum'
 import type { Module, Topic, Assessment, DifficultyLevel } from '../types'
 
 // ─── Difficulty Badge ───
@@ -122,7 +123,7 @@ function AssessmentCard({ assessment }: { assessment: Assessment }) {
           </div>
           <div className="flex items-center gap-2 mt-0.5">
             <Clock size={9} className="text-text-secondary" />
-            <span className="text-[10px] text-text-secondary">{assessment.estimatedHours}h estimated</span>
+            <span className="text-[10px] text-text-secondary">{formatHours(assessment.estimatedHours)} estimated</span>
           </div>
         </div>
         <ChevronDown size={12} className={`text-text-secondary flex-shrink-0 transition-transform duration-200 ${expanded ? 'rotate-0' : '-rotate-90'}`} />
@@ -171,6 +172,10 @@ function TopicRow({ topic }: { topic: Topic }) {
   const allDone = completedCount === topic.subtopics.length
   const progressPercent = topic.subtopics.length > 0 ? (completedCount / topic.subtopics.length) * 100 : 0
   const meta = topic.meta
+  const totalEstimateMinutes = topic.subtopics.reduce(
+    (sum, s) => sum + calculateSubTopicEstimateMinutes(topic, s),
+    0,
+  )
 
   return (
     <div
@@ -199,16 +204,14 @@ function TopicRow({ topic }: { topic: Topic }) {
             <span className="text-[10px] text-text-secondary">
               {completedCount}/{topic.subtopics.length} subtopics
             </span>
+            <span className="text-[10px] text-text-secondary flex items-center gap-0.5">
+              <Clock size={9} />
+              {formatDuration(totalEstimateMinutes)} est.
+            </span>
             {totalHours > 0 && (
               <span className="text-[10px] text-text-secondary flex items-center gap-0.5">
-                <Clock size={9} />
-                {totalHours.toFixed(1)}h logged
-              </span>
-            )}
-            {meta && (
-              <span className="text-[10px] text-text-secondary flex items-center gap-0.5">
                 <Target size={9} />
-                ~{meta.estimatedHours}h
+                {formatHours(totalHours)} logged
               </span>
             )}
           </div>
@@ -251,13 +254,23 @@ function TopicRow({ topic }: { topic: Topic }) {
                 >
                   {sub.name}
                 </span>
-                <span
-                  className={`text-[10px] tabular-nums flex items-center gap-0.5
-                    ${sub.hoursSpent > 0 ? 'text-text-primary font-medium' : 'text-text-secondary'}`}
-                >
-                  <Clock size={9} />
-                  {sub.hoursSpent.toFixed(1)}h
-                </span>
+                {sub.completed ? (
+                  <span
+                    className="text-[10px] tabular-nums flex items-center gap-0.5 text-text-primary font-medium"
+                    title={`${formatDuration(calculateSubTopicEstimateMinutes(topic, sub))} estimated · ${formatHours(sub.hoursSpent)} logged`}
+                  >
+                    <Check size={9} />
+                    {formatDuration(Math.max(sub.hoursSpent * 60, calculateSubTopicEstimateMinutes(topic, sub)))} done
+                  </span>
+                ) : (
+                  <span
+                    className="text-[10px] tabular-nums flex items-center gap-0.5 text-text-secondary"
+                    title="Estimated study time for this subtopic"
+                  >
+                    <Clock size={9} />
+                    {formatDuration(calculateSubTopicEstimateMinutes(topic, sub))}
+                  </span>
+                )}
               </label>
             ))}
           </div>
@@ -350,7 +363,7 @@ function ModuleSection({ module: mod }: { module: Module }) {
             {totalHours > 0 && (
               <span className="text-[10px] text-text-secondary flex items-center gap-0.5">
                 <Clock size={9} />
-                {totalHours.toFixed(1)}h
+                {formatHours(totalHours)} logged
               </span>
             )}
             {assessments.length > 0 && (

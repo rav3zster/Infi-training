@@ -19,11 +19,11 @@ import type {
   ModuleAnalytics,
   DifficultyLevel,
   Topic,
+  SubTopic,
 } from '../types'
 
 // ─── Constants ───
 
-export const TOTAL_COURSE_HOURS = 100
 export const JOINING_DATE = new Date('2026-09-21')
 
 // ─── Core Formula ───
@@ -77,6 +77,131 @@ export function calculateTopicEffectiveProgress(topic: Topic): number {
 }
 
 /**
+ * Per-subtopic estimated study time in hours.
+ * Uses the complexity-based baseEstimateMinutes assigned to each atomic
+ * subtopic in the curriculum when available; falls back to an even split
+ * of the topic estimate for legacy data saved before the field existed.
+ */
+export function calculateSubTopicEstimate(
+  topic: Topic,
+  subtopic?: SubTopic,
+  factor: number = 1,
+): number {
+  let estimate: number
+  if (subtopic?.baseEstimateMinutes != null && subtopic.baseEstimateMinutes > 0) {
+    estimate = subtopic.baseEstimateMinutes / 60
+  } else {
+    const topicEstimate = topic.meta?.estimatedHours ?? 1
+    estimate = topicEstimate / Math.max(1, topic.subtopics.length)
+  }
+  return Math.round(estimate * factor * 100) / 100
+}
+
+/**
+ * Per-subtopic estimated study time in minutes (for display).
+ * Mirrors calculateSubTopicEstimate but returns whole minutes.
+ */
+export function calculateSubTopicEstimateMinutes(
+  topic: Topic,
+  subtopic?: SubTopic,
+  factor: number = 1,
+): number {
+  if (subtopic?.baseEstimateMinutes != null && subtopic.baseEstimateMinutes > 0) {
+    return Math.round(subtopic.baseEstimateMinutes * factor)
+  }
+  const topicEstimate = topic.meta?.estimatedHours ?? 1
+  const count = Math.max(1, topic.subtopics.length)
+  return Math.round((topicEstimate / count) * 60 * factor)
+}
+
+// ─── Natural Duration Formatting ───
+
+/**
+ * Format a duration in minutes naturally: 15 → '15m', 90 → '1h 30m', 120 → '2h'.
+ * Never renders decimal hours like '0.25h'.
+ */
+export function formatDuration(minutes: number): string {
+  const total = Math.max(0, Math.round(minutes))
+  if (total < 60) return `${total}m`
+  const h = Math.floor(total / 60)
+  const m = total % 60
+  if (m === 0) return `${h}h`
+  return `${h}h ${m}m`
+}
+
+/**
+ * Format a duration in hours naturally: 0.5 → '30m', 1.25 → '1h 15m', 2 → '2h'.
+ */
+export function formatHours(hours: number): string {
+  return formatDuration(hours * 60)
+}
+
+/**
+ * Completion top-up: how many hours to auto-credit when a subtopic is completed.
+ * Method 2 (Topic Completion Logging) — never double-counts:
+ *   est 45m / actual 30m → +15m   (add only the remaining estimate)
+ *   est 45m / actual 60m → +0m    (preserve genuine over-study)
+ */
+export function calculateCompletionTopUp(
+  topic: Topic,
+  subtopic: SubTopic,
+  factor: number = 1,
+): number {
+  const estimate = calculateSubTopicEstimate(topic, subtopic, factor)
+  const topUp = Math.max(0, estimate - subtopic.hoursSpent)
+  return Math.round(topUp * 100) / 100
+}
+
+/**
+ * Personalized learning-speed factor.
+ *
+ * Learns how the user's actual TIMER-sourced study time compares to the
+ * base estimates:
+ *   factor = totalTimerHours(targeted subtopics) / totalBaseEstimate(same)
+ *
+ * Completion credits (source: 'completion') are EXCLUDED because they are
+ * normalized to the estimate — they would permanently pin the ratio at 1.
+ * Only genuine timer sessions can reveal a faster (< 1) or slower (> 1)
+ * personal pace. Requires >= 3 sampled subtopics and is clamped to
+ * [0.75, 1.5] so it can never spike. A factor of 1 = learning at estimate.
+ */
+export function calculateLearningSpeedFactor(data: TrainingData): number {
+  // Map subtopicId → base estimate hours
+  const baseById = new Map<string, number>()
+  for (const mod of data.modules) {
+    for (const topic of mod.topics) {
+      for (const sub of topic.subtopics) {
+        const base = sub.baseEstimateMinutes ??
+          Math.round(((topic.meta?.estimatedHours ?? 1) / Math.max(1, topic.subtopics.length)) * 60)
+        if (base > 0) baseById.set(sub.id, base / 60)
+      }
+    }
+  }
+
+  // Accumulate genuine timer hours per subtopic (exclude completion credits)
+  const timerHoursById = new Map<string, number>()
+  for (const log of data.dailyLogs) {
+    if (log.source === 'completion') continue
+    const current = timerHoursById.get(log.subtopicId) ?? 0
+    timerHoursById.set(log.subtopicId, current + log.hours)
+  }
+
+  let baseTotal = 0
+  let actualTotal = 0
+  let samples = 0
+  for (const [id, actual] of timerHoursById) {
+    const base = baseById.get(id) ?? 0
+    if (base <= 0) continue
+    baseTotal += base
+    actualTotal += actual
+    samples++
+  }
+  if (samples < 3 || baseTotal <= 0) return 1
+  const ratio = actualTotal / baseTotal
+  return Math.max(0.75, Math.min(1.5, ratio))
+}
+
+/**
  * Remaining estimated work using the continuous progress model.
  * Instead of binary (0% or 100%), each topic contributes:
  *   estimatedHours × (1 - effectiveProgress)
@@ -85,18 +210,19 @@ export function calculateTopicEffectiveProgress(topic: Topic): number {
  * Sessions logged within a topic immediately reduce remaining work.
  */
 export function calculateRemainingEstimatedWork(data: TrainingData): number {
+  const factor = calculateLearningSpeedFactor(data)
   let total = 0
   for (const mod of data.modules) {
     for (const topic of mod.topics) {
       const effectiveProgress = calculateTopicEffectiveProgress(topic)
       const topicHours = topic.meta?.estimatedHours ?? 1
-      total += topicHours * (1 - effectiveProgress)
+      total += topicHours * factor * (1 - effectiveProgress)
     }
     // Assessments still use binary completion (can't partially complete a quiz)
     if (mod.assessments) {
       for (const a of mod.assessments) {
         if (!a.completed) {
-          total += a.estimatedHours
+          total += a.estimatedHours * factor
         }
       }
     }
@@ -402,7 +528,7 @@ export function calculateHeatmapData(
   for (let i = days - 1; i >= 0; i--) {
     const date = new Date(today)
     date.setDate(date.getDate() - i)
-    const dateStr = date.toISOString().slice(0, 10)
+    const dateStr = formatDate(date)
     const hours = hoursByDate.get(dateStr) ?? 0
 
     let intensity: 0 | 1 | 2 | 3 | 4 = 0
@@ -424,9 +550,18 @@ export function calculateHeatmapData(
 export function getAchievements(
   totalHoursSpent: number,
   longestStreak: number,
-  completedSubtopics: number,
-  totalSubtopics: number,
+  moduleAnalytics: ModuleAnalytics[],
 ): Achievement[] {
+  const javaModule = moduleAnalytics.find(m => m.id === 'm2')
+  const sqlModule = moduleAnalytics.find(m => m.id === 'm3')
+  const totalSubtopics = moduleAnalytics.reduce((s, m) => s + m.totalSubtopics, 0)
+  const completedSubtopics = moduleAnalytics.reduce((s, m) => s + m.completedSubtopics, 0)
+  const javaDone = javaModule != null && javaModule.totalSubtopics > 0
+    && javaModule.completedSubtopics >= javaModule.totalSubtopics
+  const sqlDone = sqlModule != null && sqlModule.totalSubtopics > 0
+    && sqlModule.completedSubtopics >= sqlModule.totalSubtopics
+  const roadmapDone = totalSubtopics > 0 && completedSubtopics >= totalSubtopics
+
   const allAchievements: Omit<Achievement, 'current'>[] = [
     { id: 'hours-50', name: '50 Hours', description: 'Log 50 total study hours', icon: 'Star', requirement: 50, unlocked: false },
     { id: 'hours-100', name: '100 Hours', description: 'Log 100 total study hours', icon: 'Star', requirement: 100, unlocked: false },
@@ -451,14 +586,14 @@ export function getAchievements(
       current = longestStreak
       unlocked = longestStreak >= a.requirement
     } else if (a.id === 'all-java') {
-      current = completedSubtopics
-      unlocked = completedSubtopics >= totalSubtopics // simplified
+      current = javaModule?.completedSubtopics ?? 0
+      unlocked = javaDone
     } else if (a.id === 'all-sql') {
-      current = completedSubtopics
-      unlocked = completedSubtopics >= totalSubtopics
+      current = sqlModule?.completedSubtopics ?? 0
+      unlocked = sqlDone
     } else if (a.id === 'roadmap') {
       current = completedSubtopics
-      unlocked = completedSubtopics >= totalSubtopics && totalSubtopics > 0
+      unlocked = roadmapDone
     }
 
     return { ...a, current, unlocked }
@@ -615,7 +750,7 @@ export function calculateDayClassification(
   for (let i = 0; i < days; i++) {
     const date = new Date(today)
     date.setDate(date.getDate() - i)
-    const dateStr = date.toISOString().slice(0, 10)
+    const dateStr = formatDate(date)
     const hours = hoursByDate.get(dateStr) ?? 0
 
     if (hours === 0) {
@@ -774,9 +909,13 @@ export function calculateMetrics(
 
   const nextTopic = getNextStudyTopic(data)
 
+  // ─── Personalized learning speed ───
+
+  const learningSpeedFactor = calculateLearningSpeedFactor(data)
+
   // ─── Achievements ───
 
-  const achievements = getAchievements(totalHoursSpent, longestStreak, completedSubtopics, totalSubtopics)
+  const achievements = getAchievements(totalHoursSpent, longestStreak, moduleAnalytics)
 
   // ─── Insights ───
 
@@ -800,6 +939,7 @@ export function calculateMetrics(
     totalAssessments,
     completedAssessments,
     nextStudyTopic: nextTopic,
+    learningSpeedFactor,
 
     // Adaptive Study Load Engine fields
     totalEstimatedHours,

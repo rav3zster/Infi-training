@@ -1,14 +1,6 @@
 import { createContext, useContext, useEffect, useState, useCallback, useMemo, type ReactNode } from 'react'
-import type { TrainingData, SubTopic, DashboardMetrics, Assessment, StudySession, SessionType } from '../types'
-import { createSeedData, calculateMetrics, formatDate, getAllSubtopics, getAllAssessments } from '../data/curriculum'
-
-export type ToastType = 'success' | 'info' | 'warning'
-
-export interface Toast {
-  id: string
-  type: ToastType
-  message: string
-}
+import type { TrainingData, SubTopic, DashboardMetrics, Assessment, StudySession, SessionType, Module, Topic } from '../types'
+import { createSeedData, calculateMetrics, formatDate, getAllSubtopics, getAllAssessments, calculateCompletionTopUp } from '../data/curriculum'
 
 interface TrainingContextType {
   data: TrainingData
@@ -26,10 +18,12 @@ interface TrainingContextType {
   }) => void
   toggleSubTopic: (subtopicId: string) => void
   toggleAssessment: (assessmentId: string) => void
+  /** Reset curriculum progress only (subtopics, assessments, hoursSpent) — keeps logs */
+  resetSyllabusProgress: () => void
+  /** Reset study logs only (dailyLogs, studySessions) — keeps curriculum completion */
+  resetLogs: () => void
+  /** Full factory reset — wipes everything */
   resetData: () => void
-  toasts: Toast[]
-  addToast: (type: ToastType, message: string) => void
-  dismissToast: (id: string) => void
 }
 
 const TrainingContext = createContext<TrainingContextType | null>(null)
@@ -52,13 +46,107 @@ function loadData(): TrainingData {
         if (!parsed.studySessions) {
           parsed.studySessions = []
         }
-        return parsed as TrainingData
+        const data = parsed as TrainingData
+        backfillSubTopicEstimates(data)
+        return migrateCompletionCredits(data)
       }
     }
   } catch {
     // Ignore parse errors
   }
   return createSeedData()
+}
+
+/**
+ * Backfill baseEstimateMinutes for subtopics saved before the per-subtopic
+ * complexity estimates existed. Matches each stored subtopic to its seed
+ * counterpart by id; falls back to an even split of the topic estimate.
+ * Idempotent — skips subtopics that already carry the field.
+ */
+function backfillSubTopicEstimates(data: TrainingData): TrainingData {
+  const seed = createSeedData()
+  const seedById = new Map<string, number>()
+  for (const mod of seed.modules) {
+    for (const t of mod.topics) {
+      for (const s of t.subtopics) {
+        seedById.set(s.id, s.baseEstimateMinutes ?? 0)
+      }
+    }
+  }
+  for (const mod of data.modules) {
+    for (const t of mod.topics) {
+      const topicEstimate = t.meta?.estimatedHours ?? 1
+      const count = Math.max(1, t.subtopics.length)
+      for (const s of t.subtopics) {
+        if (s.baseEstimateMinutes == null) {
+          const seedMin = seedById.get(s.id)
+          s.baseEstimateMinutes = seedMin && seedMin > 0
+            ? seedMin
+            : Math.round((topicEstimate / count) * 60)
+        }
+      }
+    }
+  }
+  return data
+}
+
+/**
+ * Shared credit routine (Method 2 — Topic Completion Logging):
+ * add the remaining estimated time to hoursSpent, dailyLogs AND studySessions,
+ * tagged source:'completion' so it can be reversed and never double-counted.
+ * Returns the credited hours (0 if actual >= estimate).
+ */
+function applyCompletionCredit(
+  data: TrainingData,
+  module: Module,
+  topic: Topic,
+  sub: SubTopic,
+  date: string,
+): number {
+  const topUp = calculateCompletionTopUp(topic, sub)
+  if (topUp <= 0) return 0
+  sub.hoursSpent = Math.round((sub.hoursSpent + topUp) * 100) / 100
+  data.dailyLogs.push({
+    date,
+    subtopicId: sub.id,
+    subtopicName: sub.name,
+    hours: topUp,
+    source: 'completion',
+  })
+  if (!data.studySessions) data.studySessions = []
+  data.studySessions.push({
+    id: `session-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    date,
+    startTime: `${date}T00:00:00`,
+    endTime: `${date}T00:00:00`,
+    durationHours: topUp,
+    type: 'learning',
+    subtopicId: sub.id,
+    subtopicName: sub.name,
+    moduleName: module.name,
+    source: 'completion',
+  })
+  return topUp
+}
+
+/**
+ * One-time idempotent migration: subtopics completed before the completion
+ * top-up feature existed were checked off with 0 recorded hours. Credit the
+ * remaining estimate so completed work actually counts toward study history.
+ * Safe to run repeatedly — completion-sourced logs are the guard.
+ */
+function migrateCompletionCredits(data: TrainingData): TrainingData {
+  for (const module of data.modules) {
+    for (const topic of module.topics) {
+      for (const sub of topic.subtopics) {
+        if (!sub.completed) continue
+        const alreadyCredited = data.dailyLogs.some(l => l.subtopicId === sub.id && l.source === 'completion')
+        if (alreadyCredited) continue
+        applyCompletionCredit(data, module, topic, sub, sub.lastStudied || formatDate(new Date()))
+      }
+    }
+  }
+  return data
 }
 
 function saveData(data: TrainingData): void {
@@ -71,7 +159,6 @@ function saveData(data: TrainingData): void {
 
 export function TrainingProvider({ children }: { children: ReactNode }) {
   const [data, setData] = useState<TrainingData>(loadData)
-  const [toasts, setToasts] = useState<Toast[]>([])
 
   // Single source of truth for metrics — computed via useMemo, no double render
   const metrics = useMemo(() => calculateMetrics(data), [data])
@@ -83,24 +170,6 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     saveData(data)
   }, [data])
-
-  // Auto-dismiss toasts after 3 seconds
-  useEffect(() => {
-    if (toasts.length === 0) return
-    const timer = setTimeout(() => {
-      setToasts(prev => prev.slice(1))
-    }, 3000)
-    return () => clearTimeout(timer)
-  }, [toasts])
-
-  const addToast = useCallback((type: ToastType, message: string) => {
-    const id = `toast-${Date.now()}`
-    setToasts(prev => [...prev, { id, type, message }])
-  }, [])
-
-  const dismissToast = useCallback((id: string) => {
-    setToasts(prev => prev.filter(t => t.id !== id))
-  }, [])
 
   const logSession = useCallback((subtopicId: string, hours: number) => {
     setData(prev => {
@@ -155,8 +224,7 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
 
       return newData
     })
-    addToast('success', `Logged ${hours.toFixed(1)}h of study`)
-  }, [addToast])
+  }, [])
 
   const logStudySession = useCallback((params: {
     subtopicId: string
@@ -210,30 +278,48 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
 
       return newData
     })
-    addToast(params.type === 'break' ? 'info' : 'success',
-      `Logged ${params.durationHours.toFixed(1)}h of ${params.type}`)
-  }, [addToast])
+  }, [])
 
   const toggleSubTopic = useCallback((subtopicId: string) => {
     setData(prev => {
       const newData = structuredClone(prev)
+      const todayStr = formatDate(new Date())
+
       for (const module of newData.modules) {
         for (const topic of module.topics) {
           const subTopic = topic.subtopics.find(st => st.id === subtopicId)
           if (subTopic) {
             subTopic.completed = !subTopic.completed
-            if (subTopic.completed && subTopic.lastStudied === '') {
-              subTopic.lastStudied = formatDate(new Date())
+            subTopic.lastStudied = todayStr
+
+            if (subTopic.completed) {
+              // Method 2: Topic Completion Logging — auto-credit the remaining
+              // estimated time (never overwrite genuine over-study).
+              applyCompletionCredit(newData, module, topic, subTopic, todayStr)
+            } else {
+              // Unchecking: reverse the completion credit (idempotent).
+              const credited = newData.dailyLogs
+                .filter(l => l.subtopicId === subtopicId && l.source === 'completion')
+                .reduce((s, l) => s + l.hours, 0)
+              if (credited > 0) {
+                subTopic.hoursSpent = Math.max(0, Math.round((subTopic.hoursSpent - credited) * 100) / 100)
+                newData.dailyLogs = newData.dailyLogs.filter(
+                  l => !(l.subtopicId === subtopicId && l.source === 'completion'),
+                )
+                if (newData.studySessions) {
+                  newData.studySessions = newData.studySessions.filter(
+                    s => !(s.subtopicId === subtopicId && s.source === 'completion'),
+                  )
+                }
+              }
             }
-            addToast(subTopic.completed ? 'success' : 'info',
-              subTopic.completed ? 'Subtopic mastered! ✓' : 'Subtopic unmarked')
             break
           }
         }
       }
       return newData
     })
-  }, [addToast])
+  }, [])
 
   const toggleAssessment = useCallback((assessmentId: string) => {
     setData(prev => {
@@ -245,21 +331,80 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
           if (assessment.completed && assessment.lastAttempted === '') {
             assessment.lastAttempted = formatDate(new Date())
           }
-          addToast(assessment.completed ? 'success' : 'info',
-            assessment.completed ? 'Assessment completed! 🎉' : 'Assessment unmarked')
           break
         }
       }
       return newData
     })
-  }, [addToast])
+  }, [])
+
+  /**
+   * Reset curriculum progress only: uncheck every subtopic (reversing its
+   * completion credit — the same math toggleSubTopic uses on uncheck),
+   * and clear all assessment state. Timer-logged sessions and study
+   * history are fully preserved.
+   */
+  const resetSyllabusProgress = useCallback(() => {
+    setData(prev => {
+      const newData = structuredClone(prev)
+      for (const module of newData.modules) {
+        for (const topic of module.topics) {
+          for (const sub of topic.subtopics) {
+            if (sub.completed) {
+              sub.completed = false
+              sub.lastStudied = ''
+              // Reverse only the completion-credited hours, not timer hours.
+              const credited = newData.dailyLogs
+                .filter(l => l.subtopicId === sub.id && l.source === 'completion')
+                .reduce((s, l) => s + l.hours, 0)
+              if (credited > 0) {
+                sub.hoursSpent = Math.max(0, Math.round((sub.hoursSpent - credited) * 100) / 100)
+              }
+            }
+          }
+        }
+        for (const a of module.assessments ?? []) {
+          a.completed = false
+          a.score = undefined
+          a.lastAttempted = ''
+        }
+      }
+      // Remove auto-credited completion logs so hours don't linger
+      // after their source completions are undone. Keep timer logs.
+      newData.dailyLogs = newData.dailyLogs.filter(l => l.source !== 'completion')
+      if (newData.studySessions) {
+        newData.studySessions = newData.studySessions.filter(s => s.source !== 'completion')
+      }
+      return newData
+    })
+  }, [])
+
+  /**
+   * Reset study logs only: clear all dailyLogs, studySessions, and the
+   * per-subtopic hoursSpent ledger they feed. Curriculum completion state
+   * (checkboxes, assessments) is preserved.
+   */
+  const resetLogs = useCallback(() => {
+    setData(prev => {
+      const newData = structuredClone(prev)
+      newData.dailyLogs = []
+      newData.studySessions = []
+      for (const module of newData.modules) {
+        for (const topic of module.topics) {
+          for (const sub of topic.subtopics) {
+            sub.hoursSpent = 0
+          }
+        }
+      }
+      return newData
+    })
+  }, [])
 
   const resetData = useCallback(() => {
     const seed = createSeedData()
     setData(seed)
     saveData(seed)
-    addToast('warning', 'All data has been reset')
-  }, [addToast])
+  }, [])
 
   return (
     <TrainingContext.Provider
@@ -272,10 +417,9 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
         logStudySession,
         toggleSubTopic,
         toggleAssessment,
+        resetSyllabusProgress,
+        resetLogs,
         resetData,
-        toasts,
-        addToast,
-        dismissToast,
       }}
     >
       {children}
