@@ -22,6 +22,7 @@ export class IndexedDbDriver implements DatabaseDriver {
 
   private db: IDBDatabase | null = null
   private openPromise: Promise<IDBDatabase> | null = null
+  private activeTransaction: IDBTransaction | null = null
 
   isOpen(): boolean {
     return this.db !== null
@@ -67,6 +68,12 @@ export class IndexedDbDriver implements DatabaseDriver {
     mode: IDBTransactionMode,
     fn: (s: IDBObjectStore) => IDBRequest<T>,
   ): Promise<T> {
+    if (this.activeTransaction) {
+      // We are inside a transaction() call — route through the shared IDBTransaction.
+      // Call fn synchronously so the request is issued before any async boundary,
+      // then promisify it in the same microtask.
+      return promisifyRequest(fn(this.activeTransaction.objectStore(store)))
+    }
     return this.getDb().then(db =>
       new Promise<T>((resolve, reject) => {
         const tx = db.transaction(store, mode)
@@ -91,6 +98,11 @@ export class IndexedDbDriver implements DatabaseDriver {
 
   async putMany(store: string, rows: Record<string, unknown>[]): Promise<void> {
     if (rows.length === 0) return
+    if (this.activeTransaction) {
+      const s = this.activeTransaction.objectStore(store)
+      for (const row of rows) s.put(row)
+      return
+    }
     const db = await this.getDb()
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(store, 'readwrite')
@@ -118,9 +130,48 @@ export class IndexedDbDriver implements DatabaseDriver {
     return Array.from(db.objectStoreNames)
   }
 
+  /**
+   * Execute fn inside a single, atomic multi-store IDB readwrite transaction.
+   *
+   * IDB requires all store names upfront.  We open a readwrite transaction over
+   * ALL known stores so any combination of put/clear/putMany inside fn shares
+   * one IDBTransaction and either all commits (oncomplete) or all rolls back.
+   *
+   * Previously this was a pass-through (return fn()) which meant each inner
+   * write opened its own IDB transaction — a crash between clear() and putMany()
+   * could leave a projected store permanently empty.
+   */
   async transaction<T>(fn: () => Promise<T>): Promise<T> {
-    // IndexedDB transactions are per-call; the facade batches where needed.
-    return fn()
+    const db = await this.getDb()
+    return new Promise<T>((resolve, reject) => {
+      const tx = db.transaction(Array.from(db.objectStoreNames), 'readwrite')
+      this.activeTransaction = tx
+
+      let fnResult: T
+      let settled = false
+
+      const fail = (err: unknown) => {
+        if (settled) return
+        settled = true
+        this.activeTransaction = null
+        try { tx.abort() } catch { /* already committed/aborted */ }
+        reject(err)
+      }
+
+      tx.oncomplete = () => {
+        this.activeTransaction = null
+        if (!settled) {
+          settled = true
+          resolve(fnResult)
+        }
+      }
+      tx.onerror = () => fail(tx.error)
+      tx.onabort = () => fail(tx.error ?? new Error('IDB transaction aborted'))
+
+      fn()
+        .then(res => { fnResult = res })
+        .catch(fail)
+    })
   }
 
   async integrityCheck(expectedStores: string[]): Promise<IntegrityCheckResult> {

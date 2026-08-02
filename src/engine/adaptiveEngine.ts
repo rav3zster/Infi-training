@@ -722,9 +722,11 @@ export function calculateAverageDailyHours(
   const today = new Date()
   today.setHours(0, 0, 0, 0)
 
-  // Days since first study session (minimum 1)
+  // Days elapsed inclusive: if first log is today → 1 day, yesterday → 2 days, etc.
+  // Math.floor + 1 gives the right inclusive count; Math.ceil would report "1 day"
+  // for any sub-day difference and never increase until a full 24 h had passed.
   const diffMs = today.getTime() - firstDate.getTime()
-  const daysSinceFirstLog = Math.max(1, Math.ceil(diffMs / (1000 * 60 * 60 * 24)))
+  const daysSinceFirstLog = Math.max(1, Math.floor(diffMs / (1000 * 60 * 60 * 24)) + 1)
 
   const total = logs.reduce((sum, log) => sum + log.hours, 0)
   return Math.round((total / daysSinceFirstLog) * 100) / 100
@@ -747,7 +749,10 @@ export function calculateDayClassification(
   let missed = 0
   const today = new Date()
 
-  for (let i = 0; i < days; i++) {
+  // Start at i=1 (yesterday) — today has not yet elapsed and must not be
+  // classified as missed or partial even when the user hasn't studied yet.
+  // calculateStreak applies the same exclusion.
+  for (let i = 1; i <= days; i++) {
     const date = new Date(today)
     date.setDate(date.getDate() - i)
     const dateStr = formatDate(date)
@@ -759,6 +764,7 @@ export function calculateDayClassification(
       partial++
     }
   }
+
 
   return { partialDays: partial, missedDays: missed }
 }

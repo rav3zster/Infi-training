@@ -306,9 +306,10 @@ describe('calculateStreak / calculateLongestStreak', () => {
 
 // ─── Day classification ───
 
+
 describe('calculateDayClassification', () => {
-  it('classifies partial and missed days', () => {
-    const today = formatDate(new Date())
+  it('classifies partial and missed days — today is excluded (not yet elapsed)', () => {
+    const todayStr = formatDate(new Date())
     const day = 24 * 60 * 60 * 1000
     const dateStr = (d: Date) => {
       const y = d.getFullYear()
@@ -318,14 +319,19 @@ describe('calculateDayClassification', () => {
     }
     const prev1 = new Date(Date.now() - day)
     const logs = [
-      { id: 'a', date: today, subtopicId: 'a', subtopicName: 'a', hours: 1 }, // partial (< 3)
-      { id: 'b', date: dateStr(prev1), subtopicId: 'a', subtopicName: 'a', hours: 0.2 }, // partial
+      // today: should be IGNORED — the day has not elapsed yet
+      { id: 'a', date: todayStr, subtopicId: 'a', subtopicName: 'a', hours: 1 },
+      // yesterday: partial (0.2h < 3h target)
+      { id: 'b', date: dateStr(prev1), subtopicId: 'a', subtopicName: 'a', hours: 0.2 },
     ]
     const { partialDays, missedDays } = calculateDayClassification(logs, 3, 30)
-    expect(partialDays).toBe(2)
-    expect(missedDays).toBe(28)
+    // Window covers yesterday … 30 days ago (30 days, today excluded).
+    // 1 partial day (yesterday), 29 missed days.
+    expect(partialDays).toBe(1)
+    expect(missedDays).toBe(29)
   })
 })
+
 
 // ─── Achievements (module-scoped) ───
 
