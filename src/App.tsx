@@ -1,6 +1,7 @@
 import { useState, createContext, useContext, useEffect } from 'react'
 import { ThemeProvider } from './context/ThemeContext'
 import { ConfirmProvider } from './context/ConfirmContext'
+import { AuthProvider } from './context/AuthContext'
 import { SyncProvider } from './context/SyncContext'
 import { TrainingProvider } from './context/TrainingContext'
 import { TimerProvider } from './context/TimerContext'
@@ -97,6 +98,7 @@ function AppRouter() {
 export default function App() {
   return (
     <ThemeProvider>
+      <AuthProvider>
       <SyncProvider>
         <ConfirmProvider>
           <TrainingProvider>
@@ -106,6 +108,7 @@ export default function App() {
           </TrainingProvider>
         </ConfirmProvider>
       </SyncProvider>
+      </AuthProvider>
     </ThemeProvider>
   )
 }

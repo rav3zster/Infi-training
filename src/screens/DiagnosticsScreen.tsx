@@ -4,7 +4,8 @@ import { localDatabase, type SyncHistoryEntry, type BackupMeta } from '../servic
 import type { DatabaseStats } from '../services/database/driver'
 import type { VersionInfo } from '../services/database/versions'
 import { useSync } from '../context/SyncContext'
-import { getDevCredentials } from '../config/devCredentials'
+import { useAuth } from '../context/AuthContext'
+import type { AuthSnapshot } from '../services/supabase/authService'
 
 interface Props {
   onExit: () => void
@@ -18,12 +19,12 @@ interface Props {
  */
 export default function DiagnosticsScreen({ onExit }: Props) {
   const { status, isOnline, lastSyncAt, syncNow } = useSync()
+  const { snapshot: auth, isConfigured, refreshSession } = useAuth()
   const [stats, setStats] = useState<DatabaseStats | null>(null)
   const [versions, setVersions] = useState<VersionInfo | null>(null)
   const [history, setHistory] = useState<SyncHistoryEntry[]>([])
   const [backups, setBackups] = useState<BackupMeta[]>([])
   const [health, setHealth] = useState<Awaited<ReturnType<typeof localDatabase.healthCheck>> | null>(null)
-  const [sessionEmail, setSessionEmail] = useState<string | null>(null)
   const [refreshTick, setRefreshTick] = useState(0)
 
   const refresh = () => setRefreshTick(t => t + 1)
@@ -58,13 +59,20 @@ export default function DiagnosticsScreen({ onExit }: Props) {
     }
   }, [refreshTick])
 
-  useEffect(() => {
-    const dev = getDevCredentials()
-    setSessionEmail(dev?.email ?? null)
-  }, [])
-
   const engine = stats?.engine ?? '—'
   const version = stats?.version ?? '—'
+
+  const authHealthValue =
+    auth.status === 'not-configured' ? 'not-configured'
+    : auth.status === 'error' ? 'error'
+    : auth.status === 'authenticated' ? 'Authenticated'
+    : auth.status === 'loading' ? 'loading'
+    : 'anonymous'
+  const supabaseHealthValue =
+    !isConfigured ? 'not-configured'
+    : auth.status === 'error' ? 'error'
+    : auth.status === 'authenticated' ? 'Connected'
+    : 'Connected'
 
   return (
     <div className="min-h-screen bg-bg-primary p-4 sm:p-6 space-y-5" style={{ maxWidth: 960, margin: '0 auto' }}>
@@ -101,8 +109,8 @@ export default function DiagnosticsScreen({ onExit }: Props) {
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
           <HealthBadge label="Database" value={health?.database ?? '…'} />
           <HealthBadge label="Storage" value={health?.storage ?? '…'} />
-          <HealthBadge label="Auth" value={health?.auth ?? 'not-configured'} />
-          <HealthBadge label="Supabase" value={health?.supabase ?? 'not-configured'} />
+          <HealthBadge label="Auth" value={authHealthValue} />
+          <HealthBadge label="Supabase" value={supabaseHealthValue} />
           <HealthBadge label="Sync" value={status} />
           <HealthBadge label="Network" value={isOnline ? 'online' : 'offline'} />
         </div>
@@ -118,8 +126,12 @@ export default function DiagnosticsScreen({ onExit }: Props) {
           <span className="r-text-tiny font-medium text-text-secondary uppercase tracking-wider">Session</span>
         </div>
         <dl className="r-text-small grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
-          <Row label="Status" value={sessionEmail ? `restored (${sessionEmail})` : 'not-configured'} />
-          <Row label="Current user" value={sessionEmail ?? '— (Phase 2: Supabase auth)'} />
+          <Row label="Session Status" value={authStatusLabel(auth)} />
+          <Row label="Current User" value={auth.email ?? '—'} />
+          <Row label="Email" value={auth.email ?? '—'} />
+          <Row label="User ID" value={auth.userId ?? '—'} />
+          <Row label="Access Token Expiry" value={formatEpoch(auth.accessTokenExpiresAt)} />
+          <Row label="Refresh Token Expiry" value={formatEpoch(auth.refreshTokenExpiresAt)} />
           <Row label="Last sync" value={lastSyncAt ?? 'never'} />
           <Row label="Queue size" value={String(stats?.pendingQueue ?? 0)} />
           <Row label="Pending uploads" value="0" />
@@ -127,13 +139,26 @@ export default function DiagnosticsScreen({ onExit }: Props) {
           <Row label="Sync errors" value={String(history.filter(h => h.kind === 'error').length)} />
           <Row label="Sync protocol" value={String(versions?.syncProtocolVersion ?? '—')} />
         </dl>
-        <button
-          type="button"
-          onClick={() => void syncNow()}
-          className="mt-3 flex items-center gap-1.5 px-3 py-2 r-text-small font-medium rounded-lg border border-border-color text-text-primary hover:border-text-secondary transition-colors cursor-pointer"
-        >
-          <RefreshCw size={12} /> Sync now
-        </button>
+        {auth.error && (
+          <p className="r-text-tiny text-red-600 dark:text-red-400 mt-2">Auth error: {auth.error}</p>
+        )}
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => void syncNow()}
+            className="flex items-center gap-1.5 px-3 py-2 r-text-small font-medium rounded-lg border border-border-color text-text-primary hover:border-text-secondary transition-colors cursor-pointer"
+          >
+            <RefreshCw size={12} /> Sync now
+          </button>
+          <button
+            type="button"
+            onClick={() => void refreshSession()}
+            disabled={!isConfigured}
+            className="flex items-center gap-1.5 px-3 py-2 r-text-small font-medium rounded-lg border border-border-color text-text-primary hover:border-text-secondary transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-border-color"
+          >
+            <RefreshCw size={12} /> Refresh session
+          </button>
+        </div>
       </section>
 
       {/* Database */}
@@ -238,6 +263,21 @@ function HealthBadge({ label, value }: { label: string; value: string }) {
       <p className={`r-text-small font-semibold ${color}`}>{value}</p>
     </div>
   )
+}
+
+function authStatusLabel(auth: AuthSnapshot): string {
+  switch (auth.status) {
+    case 'authenticated': return 'Active'
+    case 'loading': return 'Loading…'
+    case 'anonymous': return 'Anonymous'
+    case 'error': return 'Error'
+    case 'not-configured': return 'Not configured'
+  }
+}
+
+function formatEpoch(epochSeconds: number | null): string {
+  if (epochSeconds == null) return 'n/a'
+  return new Date(epochSeconds * 1000).toLocaleString()
 }
 
 function formatBytes(bytes: number): string {
