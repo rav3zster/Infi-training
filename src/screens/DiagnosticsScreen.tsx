@@ -132,19 +132,27 @@ export default function DiagnosticsScreen({ onExit }: Props) {
           <Row label="User ID" value={auth.userId ?? '—'} />
           <Row label="Access Token Expiry" value={formatEpoch(auth.accessTokenExpiresAt)} />
           <Row label="Refresh Token Expiry" value={formatEpoch(auth.refreshTokenExpiresAt)} />
+          <Row label="Device ID" value={syncStats?.deviceId ?? '—'} />
           <Row label="Last sync" value={lastSyncAt ?? 'never'} />
           <Row label="Queue size" value={String(syncStats?.queueSize ?? 0)} />
           <Row label="Pending uploads" value={String(syncStats?.queueSize ?? 0)} />
           <Row label="Pending downloads" value="— (auto-merge)" />
           <Row label="Last upload" value={syncStats?.lastUploadAt ? new Date(syncStats.lastUploadAt).toLocaleTimeString() : 'never'} />
           <Row label="Last download" value={syncStats?.lastDownloadAt ? new Date(syncStats.lastDownloadAt).toLocaleTimeString() : 'never'} />
+          <Row label="Last uploaded record" value={syncStats?.lastUploadedRecord ?? '—'} />
+          <Row label="Last downloaded record" value={syncStats?.lastDownloadedRecord ?? '—'} />
+          <Row label="Last realtime event" value={syncStats?.lastRealtimeEvent ? new Date(syncStats.lastRealtimeEvent).toLocaleTimeString() : 'never'} />
           <Row label="Rows uploaded" value={String(syncStats?.rowsUploaded ?? 0)} />
           <Row label="Rows downloaded" value={String(syncStats?.rowsDownloaded ?? 0)} />
+          <Row label="Upload speed" value={syncStats?.uploadSpeedRowsPerSec != null ? `${syncStats.uploadSpeedRowsPerSec}/s` : '—'} />
+          <Row label="Download speed" value={syncStats?.downloadSpeedRowsPerSec != null ? `${syncStats.downloadSpeedRowsPerSec}/s` : '—'} />
           <Row label="Current operation" value={syncStats?.currentOp ?? (status === 'uploading' ? 'uploading' : status === 'downloading' ? 'downloading' : status === 'merging' ? 'merging' : '—')} />
           <Row label="Average sync time" value={syncStats?.avgSyncTimeMs != null ? `${syncStats.avgSyncTimeMs}ms` : '—'} />
           <Row label="Failed operations" value={String(syncStats?.failedOps ?? 0)} />
           <Row label="Retry count" value={String(syncStats?.retryCount ?? 0)} />
           <Row label="Supabase latency" value={syncStats?.latencyMs != null ? `${syncStats.latencyMs}ms` : '—'} />
+          <Row label="Last cloud backup" value={syncStats?.lastCloudBackupAt ? new Date(syncStats.lastCloudBackupAt).toLocaleString() : 'never'} />
+          <Row label="Cloud backups" value={String(syncStats?.cloudBackupCount ?? 0)} />
           <Row label="Last sync error" value={syncStats?.lastError ?? 'none'} />
           <Row label="Sync protocol" value={String(versions?.syncProtocolVersion ?? '—')} />
         </dl>

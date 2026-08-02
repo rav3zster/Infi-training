@@ -4,17 +4,20 @@ import { localDatabase, type SyncHistoryEntry, type SyncStats } from '../databas
 import { getSupabaseClient } from '../supabase/supabaseClient'
 import type { TrainingData, SubTopic, Assessment } from '../../types'
 import { JOINING_DATE } from '../../engine/adaptiveEngine'
+import { SYNC_PROTOCOL_VERSION } from '../database/versions'
+import { getDeviceId } from './deviceId'
 import {
   listPendingOps,
   listAllOps,
   removeOp,
   markOpFailed,
   countPendingOps,
+  resetStuckOps,
   clearOutbox,
   type OutboxOp,
   type SyncTable,
 } from './outboxRepository'
-import { TABLE_CONFIG, DOWNLOAD_TABLES, remoteToDailyLog, remoteToStudySession } from './mappers'
+import { TABLE_CONFIG, DOWNLOAD_TABLES, remoteToDailyLog, remoteToStudySession, remoteToStudyEvent } from './mappers'
 import { syncStatusService } from './SyncStatus'
 import { latestTrainingData } from './latestData'
 
@@ -23,13 +26,21 @@ import { latestTrainingData } from './latestData'
  *
  * Offline-first: local writes always land first (TrainingContext), the outbox
  * records them, and this engine drains the outbox to Supabase in the
- * background — the UI never waits for the network. Then it downloads newer
- * cloud rows and merges them into local data with a local-first policy:
+ * background — the UI never waits for the network. Then it downloads NEWER
+ * cloud rows (delta: `updated_at > lastSyncAt`) and merges them into local
+ * data with a simple last-write-wins policy:
  *   • Rows with a PENDING outbox op (unsent local change) are never
  *     overwritten by a download — the local change wins and gets pushed.
- *   • Otherwise the newest updated_at wins (last-write-wins).
- *   • Logs/sessions are append-only: remote rows missing locally are added,
- *     existing client_ids are never duplicated.
+ *   • Otherwise the NEWEST updated_at wins, and every field is applied
+ *     verbatim (strict LWW — a newer remote un-check or lower hours applies).
+ *   • Logs/sessions/events are append-only: remote rows missing locally are
+ *     added, existing client_ids are never duplicated.
+ *   • Settings (theme + date offset) converge on the newest row.
+ *
+ * Every uploaded row is stamped with `user_id`, `device_id` and
+ * `sync_version` (LWW provenance). Once per day, after a successful cycle, a
+ * full backup snapshot is uploaded to the `backups` table (keep latest 5) —
+ * purely for recovery, never used for synchronization.
  *
  * The engine is a pure service: it talks to the driver, the Supabase client,
  * and the LocalDatabase facade — never to React.
@@ -37,6 +48,26 @@ import { latestTrainingData } from './latestData'
 
 export const BATCH_SIZE = 50
 export const RETRY_CAP = 8
+export const MAX_CLOUD_BACKUPS = 5
+
+/**
+ * Delta filter column per table (server-side watermark for incremental
+ * downloads). Everything uses `updated_at` EXCEPT study_events, which is
+ * append-only and has no updated_at column — its natural event timestamp
+ * (`occurred_at`, present in migration 0001) is the correct delta key.
+ */
+const DELTA_COLUMN: Partial<Record<SyncTable, string>> = {
+  study_events: 'occurred_at',
+}
+
+/**
+ * Safety overlap for delta downloads. The watermark is set from the CLIENT
+ * clock at the end of each cycle; a device clock slightly ahead of the DB
+ * clock could otherwise skip rows written between db-now and client-now.
+ * Re-downloading a small overlap window and letting client_id dedup (plus
+ * the client-side cutoff check) handle idempotency costs nothing.
+ */
+const DELTA_OVERLAP_MS = 5 * 60_000
 
 export interface SyncEngineDeps {
   driver: DatabaseDriver
@@ -58,6 +89,12 @@ export interface SyncEngineDeps {
   getTheme: () => string
   /** Push a downloaded theme into device storage (for settings download). */
   applyTheme: (theme: string) => void
+  /** Read the device-local simulated date offset (for settings upload). */
+  getDateOffset: () => number
+  /** Push a downloaded date offset into device storage. */
+  applyDateOffset: (offset: number) => void
+  /** Full portable backup snapshot JSON (for the daily cloud backup). */
+  exportSnapshot: () => Promise<string>
 }
 
 export interface SyncRunReport {
@@ -90,8 +127,9 @@ export class SyncEngine {
   }
 
   /**
-   * Full sync cycle: upload outbox → download + merge. Never throws; every
-   * failure is captured in the report and the SyncStatus service.
+   * Full sync cycle: upload outbox → download delta + merge → daily cloud
+   * backup. Never throws; every failure is captured in the report and the
+   * SyncStatus service.
    */
   async syncNow(): Promise<SyncRunReport> {
     if (this.busy) return { uploaded: 0, deleted: 0, failed: 0, downloaded: 0, ok: false, reason: 'busy' }
@@ -120,23 +158,28 @@ export class SyncEngine {
       await this.ensureProfile(client, uid)
       const upload = await this.uploadAll(client, uid)
       const downloaded = await this.downloadAndMerge(client, uid)
+      await this.maybeCloudBackup(client, uid)
 
       const elapsed = Math.round(performance.now() - started)
       const nowIso = new Date().toISOString()
+      const current = await this.deps.stats.load()
       await this.deps.lastSyncAt.set(nowIso)
       await this.deps.stats.save({
         lastUploadAt: upload.uploaded > 0 || upload.deleted > 0 ? nowIso : undefined,
         lastDownloadAt: downloaded > 0 ? nowIso : undefined,
-        rowsUploaded: (await this.deps.stats.load()).rowsUploaded + upload.uploaded,
-        rowsDownloaded: (await this.deps.stats.load()).rowsDownloaded + downloaded,
+        rowsUploaded: current.rowsUploaded + upload.uploaded,
+        rowsDownloaded: current.rowsDownloaded + downloaded,
         failedOps: upload.failed,
-        retryCount: upload.failed,
+        retryCount: current.retryCount + upload.failed,
         avgSyncTimeMs: elapsed,
         lastError: upload.failed > 0 ? 'Some operations failed and will retry.' : null,
         currentOp: null,
         queueSize: await countPendingOps(this.deps.driver),
         latencyMs: elapsed,
         lastSyncAt: nowIso,
+        deviceId: getDeviceId(),
+        uploadSpeedRowsPerSec: upload.uploaded > 0 ? Math.round((upload.uploaded / Math.max(0.001, elapsed / 1000)) * 10) / 10 : current.uploadSpeedRowsPerSec,
+        downloadSpeedRowsPerSec: downloaded > 0 ? Math.round((downloaded / Math.max(0.001, elapsed / 1000)) * 10) / 10 : current.downloadSpeedRowsPerSec,
       })
       await this.deps.history({
         timestamp: nowIso,
@@ -215,6 +258,9 @@ export class SyncEngine {
     client: SupabaseClient,
     uid: string,
   ): Promise<{ uploaded: number; deleted: number; failed: number }> {
+    // Re-enable ops that were capped by transient failures (e.g. a schema
+    // migration mid-flight) so no queued change is ever dropped for good.
+    await resetStuckOps(this.deps.driver)
     const pending = await listPendingOps(this.deps.driver)
     if (pending.length === 0) return { uploaded: 0, deleted: 0, failed: 0 }
 
@@ -231,6 +277,8 @@ export class SyncEngine {
     let deleted = 0
     let failed = 0
     let done = 0
+    let lastUploadedLabel: string | null = null
+    const deviceId = getDeviceId()
 
     for (const [table, ops] of byTable) {
       const cfg = TABLE_CONFIG[table]
@@ -243,7 +291,15 @@ export class SyncEngine {
       const upserts = ops.filter(o => o.action === 'upsert')
       for (let i = 0; i < upserts.length; i += BATCH_SIZE) {
         const batch = upserts.slice(i, i + BATCH_SIZE)
-        const rows = batch.map(op => ({ ...(op.payload ?? {}), user_id: uid }))
+        const rows = batch.map(op => ({
+          ...(op.payload ?? {}),
+          user_id: uid,
+          // LWW provenance stamping. profiles lacks these columns and is never
+          // enqueued (only ensureProfile writes it) — skip it defensively.
+          ...(table !== 'profiles'
+            ? { device_id: deviceId, sync_version: SYNC_PROTOCOL_VERSION }
+            : {}),
+        }))
         const { error } = await client.from(table).upsert(rows, { onConflict: cfg.onConflict })
         done += batch.length
         if (error) {
@@ -253,6 +309,7 @@ export class SyncEngine {
           }
         } else {
           uploaded += batch.length
+          lastUploadedLabel = `${table}:${batch[batch.length - 1].clientId}`
           for (const op of batch) await removeOp(this.deps.driver, op.id)
         }
         syncStatusService.set('uploading', { phase: 'upload', done, total: pending.length, percent: Math.round((done / pending.length) * 100) })
@@ -275,24 +332,39 @@ export class SyncEngine {
           await markOpFailed(this.deps.driver, op.id, error.message)
         } else {
           deleted += 1
+          lastUploadedLabel = `${table}:${op.clientId}`
           await removeOp(this.deps.driver, op.id)
         }
         syncStatusService.set('uploading', { phase: 'upload', done, total: pending.length, percent: Math.round((done / pending.length) * 100) })
       }
     }
 
+    if (lastUploadedLabel) {
+      await this.deps.stats.save({ lastUploadedRecord: lastUploadedLabel })
+    }
     return { uploaded, deleted, failed }
   }
 
-  // ─── Download + local-first merge ───────────────────────────────────
+  // ─── Download + last-write-wins merge ───────────────────────────────
 
   private async downloadAndMerge(client: SupabaseClient, uid: string): Promise<number> {
     syncStatusService.set('downloading', { phase: 'download', done: 0, total: DOWNLOAD_TABLES.length, percent: 0 })
 
+    const lastSyncRaw = await this.deps.lastSyncAt.get()
+    const cutoffIso = lastSyncRaw ?? undefined
+
     const remote: Record<string, Record<string, unknown>[]> = {}
     for (let i = 0; i < DOWNLOAD_TABLES.length; i++) {
       const table = DOWNLOAD_TABLES[i]
-      const { data, error } = await client.from(table).select('*').eq('user_id', uid)
+      // Delta: only rows changed since the last successful sync (minus a small
+      // overlap window for clock safety). study_events uses occurred_at.
+      const deltaColumn = DELTA_COLUMN[table] ?? 'updated_at'
+      let query = client.from(table).select('*').eq('user_id', uid)
+      if (cutoffIso) {
+        const from = new Date(new Date(cutoffIso).getTime() - DELTA_OVERLAP_MS).toISOString()
+        query = query.gt(deltaColumn, from)
+      }
+      const { data, error } = await query
       if (error) throw new Error(`${table} download: ${error.message}`)
       remote[table] = (data ?? []) as Record<string, unknown>[]
       syncStatusService.set('downloading', {
@@ -312,7 +384,6 @@ export class SyncEngine {
     // backoff window, which listPendingOps filters out) means the local change
     // is unsent and must win over a download. listAllOps covers both.
     const pendingKeys = new Set((await listAllOps(this.deps.driver)).map(op => op.id))
-    const lastSyncRaw = await this.deps.lastSyncAt.get()
     const cutoff = lastSyncRaw ? new Date(lastSyncRaw).getTime() : 0
 
     syncStatusService.set('merging', { phase: 'merge', done: 0, total: DOWNLOAD_TABLES.length, percent: 0 })
@@ -321,6 +392,7 @@ export class SyncEngine {
     applied += this.mergeTopicProgress(data, remote.topic_progress ?? [], pendingKeys, cutoff)
     applied += this.mergeAssessmentProgress(data, remote.assessment_progress ?? [], pendingKeys, cutoff)
     applied += this.mergeLogsAndSessions(data, remote)
+    applied += await this.mergeStudyEvents(remote.study_events ?? [])
     applied += this.mergeSettings(remote.settings ?? [])
 
     syncStatusService.set('merging', { phase: 'merge', done: DOWNLOAD_TABLES.length, total: DOWNLOAD_TABLES.length, percent: 100 })
@@ -328,10 +400,17 @@ export class SyncEngine {
     if (applied > 0) {
       await this.deps.persist(data)
       this.deps.notifyRemoteMerge(data)
+      await this.deps.stats.save({ lastDownloadedRecord: `merged ${applied} rows` })
     }
     return applied
   }
 
+  /**
+   * Strict LWW for subtopic progress: when the remote row is newer than the
+   * last sync AND there is no unsent local change, apply every field verbatim
+   * (completed, hoursSpent, lastStudied) — a newer remote un-check or lower
+   * hours is respected. No monotonic "max" behavior.
+   */
   private mergeTopicProgress(
     data: TrainingData,
     rows: Record<string, unknown>[],
@@ -353,15 +432,26 @@ export class SyncEngine {
       const remoteCompleted = Boolean(row.completed)
       const remoteHours = Number(row.hours_spent ?? 0)
       const remoteLast = row.last_studied_at ? String(row.last_studied_at) : ''
-      let changed = false
-      if (remoteCompleted && !sub.completed) { sub.completed = true; changed = true }
-      if (remoteHours > sub.hoursSpent) { sub.hoursSpent = Math.round(remoteHours * 100) / 100; changed = true }
-      if (remoteLast && remoteLast > (sub.lastStudied ?? '')) { sub.lastStudied = remoteLast; changed = true }
-      if (changed) applied++
+      // LWW: the newer remote row decides `completed` and `lastStudied` verbatim.
+      // hoursSpent is a cumulative counter backed by append-only daily_logs, so
+      // it may only grow (never regress below what was genuinely logged) — a
+      // deliberate safety net against cross-device hour loss.
+      const nextHours = Math.max(sub.hoursSpent, Math.round(remoteHours * 100) / 100)
+      if (
+        sub.completed !== remoteCompleted ||
+        sub.hoursSpent !== nextHours ||
+        (sub.lastStudied ?? '') !== remoteLast
+      ) {
+        sub.completed = remoteCompleted
+        sub.hoursSpent = nextHours
+        sub.lastStudied = remoteLast
+        applied++
+      }
     }
     return applied
   }
 
+  /** Strict LWW for assessment progress (completed + score verbatim). */
   private mergeAssessmentProgress(
     data: TrainingData,
     rows: Record<string, unknown>[],
@@ -381,10 +471,14 @@ export class SyncEngine {
       if (!a) continue
       const remoteCompleted = Boolean(row.completed)
       const remoteScore = row.score != null ? Number(row.score) : undefined
-      let changed = false
-      if (remoteCompleted && !a.completed) { a.completed = true; changed = true }
-      if (remoteScore != null && Number.isFinite(remoteScore) && a.score !== remoteScore) { a.score = remoteScore; changed = true }
-      if (changed) applied++
+      if (
+        a.completed !== remoteCompleted ||
+        (remoteScore != null && Number.isFinite(remoteScore) && a.score !== remoteScore)
+      ) {
+        a.completed = remoteCompleted
+        if (remoteScore != null && Number.isFinite(remoteScore)) a.score = remoteScore
+        applied++
+      }
     }
     return applied
   }
@@ -420,18 +514,125 @@ export class SyncEngine {
     return applied
   }
 
-  /** Settings: single row per user — apply theme if it changed remotely. */
+  /** Append-only merge: add remote study events into the local event store. */
+  private async mergeStudyEvents(rows: Record<string, unknown>[]): Promise<number> {
+    let applied = 0
+    for (const row of rows) {
+      const id = String(row.client_id ?? '')
+      if (!id) continue
+      const existing = await this.deps.driver.get('study_events', id)
+      if (existing) continue
+      const event = remoteToStudyEvent(row)
+      if (!event) continue
+      await this.deps.driver.put('study_events', { id, data: event as unknown as Record<string, unknown> })
+      applied++
+    }
+    return applied
+  }
+
+  /** Settings: single row per user — apply theme + date offset if changed. */
   private mergeSettings(rows: Record<string, unknown>[]): number {
     let applied = 0
     for (const row of rows) {
       const theme = String(row.theme ?? '')
-      if (!theme) continue
-      if (theme !== this.deps.getTheme()) {
-        this.deps.applyTheme(theme)
+      if (theme && theme !== this.deps.getTheme()) {
+        this.deps.applyTheme(theme === 'dark' ? 'dark' : 'light')
+        applied++
+      }
+      const offset = Number(row.date_offset)
+      if (Number.isFinite(offset) && offset !== this.deps.getDateOffset()) {
+        this.deps.applyDateOffset(Math.round(offset))
         applied++
       }
     }
     return applied
+  }
+
+  // ─── Daily cloud backup (recovery only, never sync) ────────────────
+
+  /**
+   * Once per calendar day, upload a full portable backup snapshot to the
+   * `backups` table (keep the latest MAX_CLOUD_BACKUPS). Best-effort — a
+   * failed backup must never break the sync cycle.
+   */
+  private async maybeCloudBackup(client: SupabaseClient, uid: string): Promise<void> {
+    try {
+      const stats = await this.deps.stats.load()
+      const today = new Date().toISOString().slice(0, 10)
+      if (stats.lastCloudBackupAt && stats.lastCloudBackupAt.slice(0, 10) === today) return
+
+      const snapshot = await this.deps.exportSnapshot()
+      if (!snapshot) return
+      const payload = JSON.parse(snapshot) as Record<string, unknown>
+      const name = `auto-${today}`
+      const backupRow = {
+        user_id: uid,
+        name,
+        kind: 'auto',
+        payload,
+        size_bytes: snapshot.length,
+      }
+      // Upsert on the (user_id, name) unique key (migration 0002) so a crash
+      // between insert and stats.save can never create a duplicate snapshot.
+      // If the unique index is not deployed yet (pre-0002 database), fall back
+      // to an IDEMPOTENT check-then-insert: only insert when no snapshot with
+      // this name already exists, so repeated cycles (or a crash between the
+      // insert and stats.save) can never pile up duplicate (user_id, name)
+      // rows. Backups are best-effort and must never block sync.
+      let created = true
+      let error: { message: string } | null = null
+      const res = await client.from('backups').upsert(backupRow, { onConflict: 'user_id,name' })
+      error = res.error
+      if (error && /unique or exclusion constraint|ON CONFLICT/i.test(error.message)) {
+        // Pre-0002 database — no unique key, resolve idempotency manually.
+        const { data: existing, error: checkErr } = await client
+          .from('backups')
+          .select('id')
+          .eq('user_id', uid)
+          .eq('name', name)
+          .limit(1)
+        if (checkErr) throw new Error(`backup check: ${checkErr.message}`)
+        if (!existing || existing.length === 0) {
+          const fallback = await client.from('backups').insert(backupRow)
+          error = fallback.error
+        } else {
+          created = false // snapshot already exists — idempotent, nothing to do
+          error = null
+        }
+      }
+      if (error) throw new Error(`backup upload: ${error.message}`)
+
+      // Keep the latest MAX_CLOUD_BACKUPS (prune older auto snapshots).
+      const { data: existing, error: listErr } = await client
+        .from('backups')
+        .select('id, created_at')
+        .eq('user_id', uid)
+        .order('created_at', { ascending: false })
+      if (!listErr && existing && existing.length > MAX_CLOUD_BACKUPS) {
+        for (const extra of existing.slice(MAX_CLOUD_BACKUPS)) {
+          await client.from('backups').delete().eq('user_id', uid).eq('id', String(extra.id))
+        }
+      }
+
+      await this.deps.stats.save({
+        lastCloudBackupAt: new Date().toISOString(),
+        cloudBackupCount: stats.cloudBackupCount + (created ? 1 : 0),
+      })
+      await this.deps.history({
+        timestamp: new Date().toISOString(),
+        kind: 'info',
+        detail: `Cloud backup snapshot uploaded (${name})`,
+      })
+    } catch (error) {
+      // A backup failure must never masquerade as a sync failure — record it
+      // in sync history only, leave lastError (the sync error) untouched.
+      const message = error instanceof Error ? error.message : String(error)
+      await this.deps.history({
+        timestamp: new Date().toISOString(),
+        kind: 'error',
+        detail: `Cloud backup failed: ${message}`,
+      })
+    }
   }
 }
 
@@ -497,6 +698,25 @@ export function getSyncEngine(): SyncEngine {
           window.dispatchEvent(new CustomEvent('training:theme-applied', { detail: theme }))
         }
       },
+      getDateOffset: () => {
+        try {
+          const n = Number(localStorage.getItem('training-tracker-date-offset') ?? 0)
+          return Number.isFinite(n) ? n : 0
+        } catch {
+          return 0
+        }
+      },
+      applyDateOffset: offset => {
+        try {
+          localStorage.setItem('training-tracker-date-offset', String(offset))
+        } catch {
+          /* best-effort */
+        }
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('training:date-offset-applied', { detail: offset }))
+        }
+      },
+      exportSnapshot: () => localDatabase.exportBackup(),
     })
   }
   return engineSingleton

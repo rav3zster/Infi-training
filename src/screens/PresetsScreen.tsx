@@ -1,10 +1,12 @@
-import { useState, useMemo, useRef } from 'react'
+import { useState, useMemo, useRef, useEffect } from 'react'
 import { useTheme } from '../context/ThemeContext'
 import { useTraining } from '../context/TrainingContext'
 import { useConfirm } from '../context/ConfirmContext'
 import { useLayout } from '../App'
 import { calculateMetrics } from '../data/curriculum'
 import { localDatabase } from '../services/database/LocalDatabase'
+import { readDateOffset, writeDateOffset } from '../services/sync/clientSettings'
+import { enqueueSettingsSync } from '../services/sync/settingsSync'
 import { Sun, Moon, Settings, RotateCcw, AlertTriangle, CalendarClock, Download, Upload } from 'lucide-react'
 
 export default function PresetsScreen() {
@@ -16,8 +18,32 @@ export default function PresetsScreen() {
   const [backupMsg, setBackupMsg] = useState<string | null>(null)
   const [backupError, setBackupError] = useState<string | null>(null)
 
-  const [dateOffset, setDateOffset] = useState(0)
+  const [dateOffset, setDateOffset] = useState(() => readDateOffset())
   const [showResetConfirm, setShowResetConfirm] = useState(false)
+
+  // Set true ONLY while adopting a remote offset pushed by the Sync Engine, so
+  // the enqueue below doesn't echo the same value back to the cloud (no loop).
+  const adoptingRemoteOffset = useRef(false)
+
+  // Phase 3: persist + enqueue the offset for cloud sync whenever it changes.
+  useEffect(() => {
+    writeDateOffset(dateOffset)
+    const wasRemote = adoptingRemoteOffset.current
+    adoptingRemoteOffset.current = false
+    if (!wasRemote) {
+      void enqueueSettingsSync()
+    }
+  }, [dateOffset])
+
+  // Phase 3: adopt a date offset synced from another device (Sync Engine download).
+  useEffect(() => {
+    const onRemoteOffset = (e: Event) => {
+      adoptingRemoteOffset.current = true
+      setDateOffset(Number((e as CustomEvent<number>).detail) || 0)
+    }
+    window.addEventListener('training:date-offset-applied', onRemoteOffset)
+    return () => window.removeEventListener('training:date-offset-applied', onRemoteOffset)
+  }, [])
 
   const previewMetrics = useMemo(() => calculateMetrics(data, { dateOffset }), [data, dateOffset])
 

@@ -24,6 +24,9 @@ export const TABLE_CONFIG: Record<SyncTable, TableConfig> = {
   study_sessions: { onConflict: 'user_id,client_id', deleteKey: 'client_id' },
   study_events: { onConflict: 'user_id,client_id', deleteKey: 'client_id' },
   settings: { onConflict: 'user_id', deleteKey: null },
+  // revision_queue has a natural key (user_id, subtopic_id) — migration 0002
+  // adds the matching UNIQUE index. No local store yet; upload-capable only.
+  revision_queue: { onConflict: 'user_id,subtopic_id', deleteKey: 'subtopic_id' },
 }
 
 /** Tables the engine downloads and merges back into local data. */
@@ -32,6 +35,7 @@ export const DOWNLOAD_TABLES = [
   'assessment_progress',
   'daily_logs',
   'study_sessions',
+  'study_events',
   'settings',
 ] as const satisfies readonly SyncTable[]
 
@@ -126,6 +130,19 @@ export function remoteToStudySession(row: Record<string, unknown>): StudySession
     moduleName: row.module_name ? String(row.module_name) : '',
     notes: row.notes ? String(row.notes) : undefined,
     source: row.source === 'completion' ? 'completion' : 'timer',
+  }
+}
+
+export function remoteToStudyEvent(row: Record<string, unknown>): StudyEvent | null {
+  const id = String(row.client_id ?? '')
+  if (!id) return null
+  return {
+    id,
+    type: (row.type as StudyEvent['type']) ?? 'system',
+    entityType: (row.entity_type as StudyEvent['entityType']) ?? 'system',
+    entityId: String(row.entity_id ?? ''),
+    payload: (row.payload as Record<string, unknown>) ?? {},
+    occurredAt: String(row.occurred_at ?? new Date().toISOString()),
   }
 }
 

@@ -19,6 +19,7 @@ export type SyncTable =
   | 'study_sessions'
   | 'study_events'
   | 'settings'
+  | 'revision_queue'
 
 export interface OutboxOp {
   /** Stable op id = `${table}:${clientId}` — the compression key. */
@@ -192,6 +193,41 @@ export async function markOpFailed(
     })
   } catch {
     // best-effort
+  }
+}
+
+/**
+ * Re-enable ops that hit the attempt cap (attempts >= MAX_ATTEMPTS).
+ *
+ * The cap exists to stop a hot record from hammering the network, but an op
+ * can be capped by a TRANSIENT failure (e.g. the DB schema was migrated
+ * mid-flight and a column was missing for a few minutes). Single-user app:
+ * the engine calls this at the start of every cycle, so a capped op is retried
+ * on the next sync instead of being silently dropped forever — no data loss.
+ */
+export async function resetStuckOps(driver: DatabaseDriver): Promise<number> {
+  try {
+    const rows = await driver.getAll('sync_outbox')
+    let reset = 0
+    for (const row of rows) {
+      const op = row.data as unknown as OutboxOp
+      if (op && op.attempts >= MAX_ATTEMPTS) {
+        await driver.put('sync_outbox', {
+          id: row.id,
+          data: {
+            ...op,
+            attempts: 0,
+            lastError: null,
+            nextRetryAt: null,
+            updatedAt: Date.now(),
+          } satisfies OutboxOp,
+        })
+        reset++
+      }
+    }
+    return reset
+  } catch {
+    return 0
   }
 }
 

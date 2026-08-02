@@ -1,6 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
 import { syncStatusService, type SyncStatus, type SyncProgress } from '../services/sync/SyncStatus'
 import { getSyncEngine } from '../services/sync/syncEngine'
+import { realtimeService } from '../services/sync/realtimeService'
+import { getSupabaseClient } from '../services/supabase/supabaseClient'
 import { localDatabase, type SyncStats } from '../services/database/LocalDatabase'
 import { useAuth } from './AuthContext'
 
@@ -11,6 +13,9 @@ import { useAuth } from './AuthContext'
  * provider owns its lifecycle:
  *   • start the periodic cycle (every 20s while online)
  *   • run a cycle as soon as silent auth succeeds
+ *   • subscribe to Supabase Realtime (postgres_changes) while authenticated,
+ *     so changes made on ANOTHER device trigger a delta download + merge
+ *     within seconds — no refresh button
  *   • run a cycle on reconnect and on every local `sync:request` event
  *     (dispatched by TrainingContext after mutations)
  *   • purge remote data on `training:purge` (factory reset)
@@ -77,6 +82,26 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       void getSyncEngine().syncNow()
     }
   }, [authStatus])
+
+  // ── Supabase Realtime: subscribe while authenticated, unsubscribe on logout ──
+  useEffect(() => {
+    if (authStatus !== 'authenticated' || !auth.userId) return
+    const client = getSupabaseClient()
+    if (!client) return
+    realtimeService.subscribe(client, auth.userId)
+    return () => realtimeService.unsubscribe()
+  }, [authStatus, auth.userId])
+
+  // ── Realtime event from another device → record it + trigger a delta sync ──
+  useEffect(() => {
+    const onRealtime = () => {
+      void localDatabase.updateSyncStats({ lastRealtimeEvent: new Date().toISOString() })
+      // A remote change means the cloud moved past our watermark — pull it now.
+      getSyncEngine().requestSync(1500)
+    }
+    window.addEventListener('sync:realtime', onRealtime)
+    return () => window.removeEventListener('sync:realtime', onRealtime)
+  }, [])
 
   // ── Local mutation event → background sync (throttled by the engine) ──
   useEffect(() => {

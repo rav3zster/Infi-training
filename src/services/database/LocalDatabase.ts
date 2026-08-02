@@ -61,6 +61,22 @@ export interface SyncStats {
   queueSize: number
   latencyMs: number | null
   lastSyncAt: string | null
+  /** Which device last wrote the most recent uploaded row (LWW provenance). */
+  deviceId: string | null
+  /** Human label of the most recent uploaded record (e.g. 'topic_progress:m2-t1-s1'). */
+  lastUploadedRecord: string | null
+  /** Human label of the most recent downloaded record. */
+  lastDownloadedRecord: string | null
+  /** ISO timestamp of the last Realtime event received from another device. */
+  lastRealtimeEvent: string | null
+  /** Upload throughput (rows/sec) of the last cycle. */
+  uploadSpeedRowsPerSec: number | null
+  /** Download throughput (rows/sec) of the last cycle. */
+  downloadSpeedRowsPerSec: number | null
+  /** ISO timestamp of the last automatic cloud backup snapshot. */
+  lastCloudBackupAt: string | null
+  /** Total automatic cloud backups created. */
+  cloudBackupCount: number
 }
 
 export const DEFAULT_SYNC_STATS: SyncStats = {
@@ -76,6 +92,14 @@ export const DEFAULT_SYNC_STATS: SyncStats = {
   queueSize: 0,
   latencyMs: null,
   lastSyncAt: null,
+  deviceId: null,
+  lastUploadedRecord: null,
+  lastDownloadedRecord: null,
+  lastRealtimeEvent: null,
+  uploadSpeedRowsPerSec: null,
+  downloadSpeedRowsPerSec: null,
+  lastCloudBackupAt: null,
+  cloudBackupCount: 0,
 }
 
 const MAX_BACKUPS = 5

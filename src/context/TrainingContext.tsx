@@ -143,6 +143,8 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
     }
   }, [data])
 
+
+
   // Flush pending writes when the app is hidden (pagehide / visibilitychange)
   useEffect(() => {
     const flush = () => {

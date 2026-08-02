@@ -70,9 +70,15 @@ export class IndexedDbDriver implements DatabaseDriver {
   ): Promise<T> {
     if (this.activeTransaction) {
       // We are inside a transaction() call — route through the shared IDBTransaction.
-      // Call fn synchronously so the request is issued before any async boundary,
-      // then promisify it in the same microtask.
-      return promisifyRequest(fn(this.activeTransaction.objectStore(store)))
+      try {
+        // Call fn synchronously so the request is issued before any async
+        // boundary, then promisify it in the same microtask.
+        return promisifyRequest(fn(this.activeTransaction.objectStore(store)))
+      } catch {
+        // The shared transaction may be finishing/committed (a race between a
+        // concurrent reader and the engine's write transaction). Fall back to
+        // an independent transaction instead of failing the caller.
+      }
     }
     return this.getDb().then(db =>
       new Promise<T>((resolve, reject) => {
@@ -99,9 +105,13 @@ export class IndexedDbDriver implements DatabaseDriver {
   async putMany(store: string, rows: Record<string, unknown>[]): Promise<void> {
     if (rows.length === 0) return
     if (this.activeTransaction) {
-      const s = this.activeTransaction.objectStore(store)
-      for (const row of rows) s.put(row)
-      return
+      try {
+        const s = this.activeTransaction.objectStore(store)
+        for (const row of rows) s.put(row)
+        return
+      } catch {
+        // Shared transaction finishing — fall through to an independent write.
+      }
     }
     const db = await this.getDb()
     await new Promise<void>((resolve, reject) => {
