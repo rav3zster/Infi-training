@@ -166,6 +166,7 @@ describe('calculateTopicEffectiveProgress', () => {
  */
 function makeTimerLogs(subtopicIds: string[], hours: number | number[]) {
   return subtopicIds.map((id, i) => ({
+    id: `log-${i}`,
     date: formatDate(new Date()),
     subtopicId: id,
     subtopicName: id,
@@ -271,33 +272,33 @@ describe('calculateStreak / calculateLongestStreak', () => {
 
   it('counts consecutive days with >= 0.5h', () => {
     const logs = [
-      { date: dateStr(prev2), subtopicId: 'a', subtopicName: 'a', hours: 1 },
-      { date: dateStr(prev1), subtopicId: 'a', subtopicName: 'a', hours: 1 },
-      { date: today, subtopicId: 'a', subtopicName: 'a', hours: 1 },
+      { id: 'a', date: dateStr(prev2), subtopicId: 'a', subtopicName: 'a', hours: 1 },
+      { id: 'b', date: dateStr(prev1), subtopicId: 'a', subtopicName: 'a', hours: 1 },
+      { id: 'c', date: today, subtopicId: 'a', subtopicName: 'a', hours: 1 },
     ]
     expect(calculateStreak(logs)).toBe(3)
   })
 
   it('breaks the streak when a day is skipped', () => {
     const logs = [
-      { date: dateStr(prev2), subtopicId: 'a', subtopicName: 'a', hours: 1 },
-      { date: today, subtopicId: 'a', subtopicName: 'a', hours: 1 },
+      { id: 'a', date: dateStr(prev2), subtopicId: 'a', subtopicName: 'a', hours: 1 },
+      { id: 'b', date: today, subtopicId: 'a', subtopicName: 'a', hours: 1 },
     ]
     expect(calculateStreak(logs)).toBe(1)
   })
 
   it('requires >= 0.5h to count a day', () => {
     const logs = [
-      { date: today, subtopicId: 'a', subtopicName: 'a', hours: 0.3 },
+      { id: 'a', date: today, subtopicId: 'a', subtopicName: 'a', hours: 0.3 },
     ]
     expect(calculateStreak(logs)).toBe(0)
   })
 
   it('calculateLongestStreak handles multi-day history', () => {
     const logs = [
-      { date: dateStr(prev2), subtopicId: 'a', subtopicName: 'a', hours: 1 },
-      { date: dateStr(prev1), subtopicId: 'a', subtopicName: 'a', hours: 1 },
-      { date: today, subtopicId: 'a', subtopicName: 'a', hours: 1 },
+      { id: 'a', date: dateStr(prev2), subtopicId: 'a', subtopicName: 'a', hours: 1 },
+      { id: 'b', date: dateStr(prev1), subtopicId: 'a', subtopicName: 'a', hours: 1 },
+      { id: 'c', date: today, subtopicId: 'a', subtopicName: 'a', hours: 1 },
     ]
     expect(calculateLongestStreak(logs)).toBe(3)
   })
@@ -317,8 +318,8 @@ describe('calculateDayClassification', () => {
     }
     const prev1 = new Date(Date.now() - day)
     const logs = [
-      { date: today, subtopicId: 'a', subtopicName: 'a', hours: 1 }, // partial (< 3)
-      { date: dateStr(prev1), subtopicId: 'a', subtopicName: 'a', hours: 0.2 }, // partial
+      { id: 'a', date: today, subtopicId: 'a', subtopicName: 'a', hours: 1 }, // partial (< 3)
+      { id: 'b', date: dateStr(prev1), subtopicId: 'a', subtopicName: 'a', hours: 0.2 }, // partial
     ]
     const { partialDays, missedDays } = calculateDayClassification(logs, 3, 30)
     expect(partialDays).toBe(2)
@@ -376,7 +377,7 @@ describe('calculateMetrics', () => {
     const sub = data.modules[0].topics[0].subtopics[0]
     sub.completed = true
     sub.hoursSpent = calculateCompletionTopUp(data.modules[0].topics[0], sub)
-    data.dailyLogs.push({ date: formatDate(new Date()), subtopicId: sub.id, subtopicName: sub.name, hours: sub.hoursSpent, source: 'completion' })
+    data.dailyLogs.push({ id: 'credit-1', date: formatDate(new Date()), subtopicId: sub.id, subtopicName: sub.name, hours: sub.hoursSpent, source: 'completion' })
     const metrics = calculateMetrics(data)
     expect(metrics.completedSubtopics).toBe(1)
     expect(metrics.remainingEstimatedWork).toBeLessThan(metrics.totalEstimatedHours)

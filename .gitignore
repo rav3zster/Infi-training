@@ -29,3 +29,8 @@ android/app/build
 android/build
 android/.gradle
 
+
+# Local env files — never commit secrets
+.env
+.env.*
+!.env.example

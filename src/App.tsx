@@ -1,6 +1,7 @@
-import { useState, createContext, useContext } from 'react'
+import { useState, createContext, useContext, useEffect } from 'react'
 import { ThemeProvider } from './context/ThemeContext'
 import { ConfirmProvider } from './context/ConfirmContext'
+import { SyncProvider } from './context/SyncContext'
 import { TrainingProvider } from './context/TrainingContext'
 import { TimerProvider } from './context/TimerContext'
 import AdaptiveNavigation from './components/AdaptiveNavigation'
@@ -11,6 +12,8 @@ import SyllabusScreen from './screens/SyllabusScreen'
 import LogWorkScreen from './screens/LogWorkScreen'
 import AnalyticsScreen from './screens/AnalyticsScreen'
 import PresetsScreen from './screens/PresetsScreen'
+import DiagnosticsScreen from './screens/DiagnosticsScreen'
+import { localDatabase } from './services/database/LocalDatabase'
 
 export type Screen = 'dashboard' | 'syllabus' | 'logwork' | 'analytics' | 'presets'
 
@@ -30,6 +33,21 @@ export function useLayout() {
 function AppRouter() {
   const [currentScreen, setCurrentScreen] = useState<Screen>('dashboard')
   const { layout } = useResponsive()
+
+  // Hidden developer diagnostics route: ?diag=1 (never in the nav)
+  const [showDiagnostics, setShowDiagnostics] = useState(
+    () => new URLSearchParams(window.location.search).has('diag'),
+  )
+  useEffect(() => {
+    if (showDiagnostics) {
+      // Prime the facade so diagnostics reads are ready
+      void localDatabase.init()
+    }
+  }, [showDiagnostics])
+
+  if (showDiagnostics) {
+    return <DiagnosticsScreen onExit={() => setShowDiagnostics(false)} />
+  }
 
   // Content padding adapts to nav mode
   const contentPaddingLeft = layout.navMode === 'sidebar'
@@ -79,13 +97,15 @@ function AppRouter() {
 export default function App() {
   return (
     <ThemeProvider>
-      <ConfirmProvider>
-        <TrainingProvider>
-          <TimerProvider>
-            <AppRouter />
-          </TimerProvider>
-        </TrainingProvider>
-      </ConfirmProvider>
+      <SyncProvider>
+        <ConfirmProvider>
+          <TrainingProvider>
+            <TimerProvider>
+              <AppRouter />
+            </TimerProvider>
+          </TrainingProvider>
+        </ConfirmProvider>
+      </SyncProvider>
     </ThemeProvider>
   )
 }

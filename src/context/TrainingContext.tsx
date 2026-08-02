@@ -1,12 +1,18 @@
-import { createContext, useContext, useEffect, useState, useCallback, useMemo, type ReactNode } from 'react'
-import type { TrainingData, SubTopic, DashboardMetrics, Assessment, StudySession, SessionType, Module, Topic } from '../types'
-import { createSeedData, calculateMetrics, formatDate, getAllSubtopics, getAllAssessments, calculateCompletionTopUp } from '../data/curriculum'
+import { createContext, useContext, useEffect, useState, useCallback, useMemo, useRef, type ReactNode } from 'react'
+import type { TrainingData, SubTopic, DashboardMetrics, Assessment, StudySession, SessionType, StudyEvent } from '../types'
+import { createSeedData, calculateMetrics, formatDate, getAllSubtopics, getAllAssessments } from '../data/curriculum'
+import { localDatabase } from '../services/database/LocalDatabase'
+import { loadLegacyLocalStorage, applyCompletionCredit, backfillLogIds } from '../services/database/legacyMigration'
+import { recordEvent as recordStudyEvent } from '../services/repositories/eventRepository'
+import { genId } from '../utils/id'
+import SplashScreen from '../components/SplashScreen'
 
 interface TrainingContextType {
   data: TrainingData
   metrics: DashboardMetrics
   allSubtopics: SubTopic[]
   allAssessments: Assessment[]
+  ready: boolean
   logSession: (subtopicId: string, hours: number) => void
   logStudySession: (params: {
     subtopicId: string
@@ -18,6 +24,10 @@ interface TrainingContextType {
   }) => void
   toggleSubTopic: (subtopicId: string) => void
   toggleAssessment: (assessmentId: string) => void
+  /** Replace all data (backup import / cloud restore) */
+  restoreData: (next: TrainingData) => void
+  /** Append an immutable study event (future analytics substrate) */
+  recordEvent: (event: Omit<StudyEvent, 'id'>) => void
   /** Reset curriculum progress only (subtopics, assessments, hoursSpent) — keeps logs */
   resetSyllabusProgress: () => void
   /** Reset study logs only (dailyLogs, studySessions) — keeps curriculum completion */
@@ -28,167 +38,128 @@ interface TrainingContextType {
 
 const TrainingContext = createContext<TrainingContextType | null>(null)
 
-const STORAGE_KEY = 'training-tracker-data'
-
-function loadData(): TrainingData {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY)
-    if (stored) {
-      const parsed = JSON.parse(stored)
-      if (parsed && Array.isArray(parsed.modules) && Array.isArray(parsed.dailyLogs)) {
-        const fa1Module = parsed.modules.find((m: { id: string }) => m.id === 'm2')
-        if (fa1Module && fa1Module.topics && fa1Module.topics.length < 10) {
-          const seed = createSeedData()
-          seed.dailyLogs = parsed.dailyLogs ?? []
-          seed.studySessions = parsed.studySessions ?? []
-          return seed
-        }
-        if (!parsed.studySessions) {
-          parsed.studySessions = []
-        }
-        const data = parsed as TrainingData
-        backfillSubTopicEstimates(data)
-        return migrateCompletionCredits(data)
-      }
-    }
-  } catch {
-    // Ignore parse errors
-  }
-  return createSeedData()
-}
-
 /**
- * Backfill baseEstimateMinutes for subtopics saved before the per-subtopic
- * complexity estimates existed. Matches each stored subtopic to its seed
- * counterpart by id; falls back to an even split of the topic estimate.
- * Idempotent — skips subtopics that already carry the field.
+ * TrainingProvider
+ *
+ * Local-first: boots the SQLite/IndexedDB store, hydrates TrainingData from
+ * it, migrates any legacy localStorage data on first run, and persists every
+ * change through the LocalDatabase facade (debounced write-through + flush on
+ * hide). All mutation math is byte-identical to the previous localStorage
+ * implementation — the Adaptive Study Load Engine is untouched.
  */
-function backfillSubTopicEstimates(data: TrainingData): TrainingData {
-  const seed = createSeedData()
-  const seedById = new Map<string, number>()
-  for (const mod of seed.modules) {
-    for (const t of mod.topics) {
-      for (const s of t.subtopics) {
-        seedById.set(s.id, s.baseEstimateMinutes ?? 0)
-      }
-    }
-  }
-  for (const mod of data.modules) {
-    for (const t of mod.topics) {
-      const topicEstimate = t.meta?.estimatedHours ?? 1
-      const count = Math.max(1, t.subtopics.length)
-      for (const s of t.subtopics) {
-        if (s.baseEstimateMinutes == null) {
-          const seedMin = seedById.get(s.id)
-          s.baseEstimateMinutes = seedMin && seedMin > 0
-            ? seedMin
-            : Math.round((topicEstimate / count) * 60)
-        }
-      }
-    }
-  }
-  return data
-}
-
-/**
- * Shared credit routine (Method 2 — Topic Completion Logging):
- * add the remaining estimated time to hoursSpent, dailyLogs AND studySessions,
- * tagged source:'completion' so it can be reversed and never double-counted.
- * Returns the credited hours (0 if actual >= estimate).
- */
-function applyCompletionCredit(
-  data: TrainingData,
-  module: Module,
-  topic: Topic,
-  sub: SubTopic,
-  date: string,
-): number {
-  const topUp = calculateCompletionTopUp(topic, sub)
-  if (topUp <= 0) return 0
-  sub.hoursSpent = Math.round((sub.hoursSpent + topUp) * 100) / 100
-  data.dailyLogs.push({
-    date,
-    subtopicId: sub.id,
-    subtopicName: sub.name,
-    hours: topUp,
-    source: 'completion',
-  })
-  if (!data.studySessions) data.studySessions = []
-  data.studySessions.push({
-    id: `session-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-    date,
-    startTime: `${date}T00:00:00`,
-    endTime: `${date}T00:00:00`,
-    durationHours: topUp,
-    type: 'learning',
-    subtopicId: sub.id,
-    subtopicName: sub.name,
-    moduleName: module.name,
-    source: 'completion',
-  })
-  return topUp
-}
-
-/**
- * One-time idempotent migration: subtopics completed before the completion
- * top-up feature existed were checked off with 0 recorded hours. Credit the
- * remaining estimate so completed work actually counts toward study history.
- * Safe to run repeatedly — completion-sourced logs are the guard.
- */
-function migrateCompletionCredits(data: TrainingData): TrainingData {
-  for (const module of data.modules) {
-    for (const topic of module.topics) {
-      for (const sub of topic.subtopics) {
-        if (!sub.completed) continue
-        const alreadyCredited = data.dailyLogs.some(l => l.subtopicId === sub.id && l.source === 'completion')
-        if (alreadyCredited) continue
-        applyCompletionCredit(data, module, topic, sub, sub.lastStudied || formatDate(new Date()))
-      }
-    }
-  }
-  return data
-}
-
-function saveData(data: TrainingData): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
-  } catch {
-    // Ignore storage errors
-  }
-}
-
 export function TrainingProvider({ children }: { children: ReactNode }) {
-  const [data, setData] = useState<TrainingData>(loadData)
+  const [data, setData] = useState<TrainingData | null>(null)
+  const [ready, setReady] = useState(false)
+  const dataRef = useRef<TrainingData | null>(null)
+  const saveTimer = useRef<number | null>(null)
 
-  // Single source of truth for metrics — computed via useMemo, no double render
-  const metrics = useMemo(() => calculateMetrics(data), [data])
-
-  const allSubtopics = useMemo(() => getAllSubtopics(data), [data])
-  const allAssessments = useMemo(() => getAllAssessments(data), [data])
-
-  // Persist on every data change
   useEffect(() => {
-    saveData(data)
+    dataRef.current = data
   }, [data])
 
+  // ─── Boot: open DB → migrate → hydrate → legacy migrate → seed ───
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        await localDatabase.init()
+        let loaded: TrainingData | null = null
+        try {
+          loaded = await localDatabase.hydrateTrainingData()
+        } catch {
+          loaded = null
+        }
+        if (!loaded) {
+          const legacy = loadLegacyLocalStorage()
+          loaded = legacy ?? createSeedData()
+          backfillLogIds(loaded)
+          await localDatabase.persistTrainingData(loaded)
+        }
+        if (!cancelled) {
+          setData(loaded)
+          setReady(true)
+        }
+      } catch {
+        // Last-resort: never block the app from booting.
+        const fallback = backfillLogIds(loadLegacyLocalStorage() ?? createSeedData())
+        if (!cancelled) {
+          setData(fallback)
+          setReady(true)
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // ─── Debounced write-through persistence ───
+  useEffect(() => {
+    if (!data) return
+    if (saveTimer.current) window.clearTimeout(saveTimer.current)
+    saveTimer.current = window.setTimeout(() => {
+      void localDatabase.persistTrainingData(data)
+    }, 800)
+    return () => {
+      if (saveTimer.current) window.clearTimeout(saveTimer.current)
+    }
+  }, [data])
+
+  // Flush pending writes when the app is hidden (pagehide / visibilitychange)
+  useEffect(() => {
+    const flush = () => {
+      const d = dataRef.current
+      if (d) void localDatabase.persistTrainingData(d)
+    }
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') flush()
+    }
+    window.addEventListener('pagehide', flush)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.removeEventListener('pagehide', flush)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [])
+
+  const metrics = useMemo<DashboardMetrics | null>(
+    () => (data ? calculateMetrics(data) : null),
+    [data],
+  )
+
+  const allSubtopics = useMemo<SubTopic[]>(
+    () => (data ? getAllSubtopics(data) : []),
+    [data],
+  )
+
+  const allAssessments = useMemo<Assessment[]>(
+    () => (data ? getAllAssessments(data) : []),
+    [data],
+  )
+
+  const recordEvent = useCallback((event: Omit<StudyEvent, 'id'>) => {
+    void recordStudyEvent(localDatabase.getDriver(), event)
+  }, [])
+
   const logSession = useCallback((subtopicId: string, hours: number) => {
+    const subTopic = dataRef.current ? getAllSubtopics(dataRef.current).find(st => st.id === subtopicId) : undefined
     setData(prev => {
-      const newData = structuredClone(prev)
+      const newData = structuredClone(prev!)
       const todayStr = formatDate(new Date())
 
       for (const module of newData.modules) {
         for (const topic of module.topics) {
-          const subTopic = topic.subtopics.find(st => st.id === subtopicId)
-          if (subTopic) {
-            subTopic.hoursSpent = Math.round((subTopic.hoursSpent + hours) * 100) / 100
-            subTopic.lastStudied = todayStr
+          const st = topic.subtopics.find(x => x.id === subtopicId)
+          if (st) {
+            st.hoursSpent = Math.round((st.hoursSpent + hours) * 100) / 100
+            st.lastStudied = todayStr
             break
           }
         }
       }
 
-      const subTopic = getAllSubtopics(prev).find(st => st.id === subtopicId)
       newData.dailyLogs.push({
+        id: genId('log'),
         date: todayStr,
         subtopicId,
         subtopicName: subTopic?.name ?? subtopicId,
@@ -198,7 +169,7 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
       const now = new Date()
       const startTime = new Date(now.getTime() - hours * 60 * 60 * 1000)
       const session: StudySession = {
-        id: `session-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        id: genId('session'),
         date: todayStr,
         startTime: startTime.toISOString(),
         endTime: now.toISOString(),
@@ -224,7 +195,14 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
 
       return newData
     })
-  }, [])
+    recordEvent({
+      type: 'session.logged',
+      entityType: 'session',
+      entityId: subtopicId,
+      payload: { hours, source: 'timer' },
+      occurredAt: new Date().toISOString(),
+    })
+  }, [recordEvent])
 
   const logStudySession = useCallback((params: {
     subtopicId: string
@@ -235,13 +213,13 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
     notes?: string
   }) => {
     setData(prev => {
-      const newData = structuredClone(prev)
+      const newData = structuredClone(prev!)
       const todayStr = formatDate(new Date())
       const now = new Date()
       const startTime = new Date(now.getTime() - params.durationHours * 60 * 60 * 1000)
 
       const session: StudySession = {
-        id: `session-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        id: genId('session'),
         date: todayStr,
         startTime: startTime.toISOString(),
         endTime: now.toISOString(),
@@ -258,6 +236,7 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
 
       if (params.type !== 'break') {
         newData.dailyLogs.push({
+          id: genId('log'),
           date: todayStr,
           subtopicId: params.subtopicId,
           subtopicName: params.subtopicName,
@@ -278,11 +257,22 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
 
       return newData
     })
-  }, [])
+    recordEvent({
+      type: 'session.logged',
+      entityType: 'session',
+      entityId: params.subtopicId,
+      payload: { hours: params.durationHours, type: params.type, notes: params.notes },
+      occurredAt: new Date().toISOString(),
+    })
+  }, [recordEvent])
 
   const toggleSubTopic = useCallback((subtopicId: string) => {
+    const sub = dataRef.current ? getAllSubtopics(dataRef.current).find(st => st.id === subtopicId) : undefined
+    const wasCompleted = sub?.completed ?? false
+    const name = sub?.name ?? subtopicId
+
     setData(prev => {
-      const newData = structuredClone(prev)
+      const newData = structuredClone(prev!)
       const todayStr = formatDate(new Date())
 
       for (const module of newData.modules) {
@@ -319,11 +309,24 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
       }
       return newData
     })
-  }, [])
+
+    recordEvent({
+      type: wasCompleted ? 'subtopic.uncompleted' : 'subtopic.completed',
+      entityType: 'subtopic',
+      entityId: subtopicId,
+      payload: { name, moduleName: findModuleName(dataRef.current, subtopicId) },
+      occurredAt: new Date().toISOString(),
+    })
+  }, [recordEvent])
 
   const toggleAssessment = useCallback((assessmentId: string) => {
+    const prevAssessment = dataRef.current
+      ? getAllAssessments(dataRef.current).find(a => a.id === assessmentId)
+      : undefined
+    const wasCompleted = prevAssessment?.completed ?? false
+
     setData(prev => {
-      const newData = structuredClone(prev)
+      const newData = structuredClone(prev!)
       for (const module of newData.modules) {
         const assessment = module.assessments?.find(a => a.id === assessmentId)
         if (assessment) {
@@ -336,7 +339,15 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
       }
       return newData
     })
-  }, [])
+
+    recordEvent({
+      type: wasCompleted ? 'assessment.uncompleted' : 'assessment.completed',
+      entityType: 'assessment',
+      entityId: assessmentId,
+      payload: { name: prevAssessment?.name ?? assessmentId },
+      occurredAt: new Date().toISOString(),
+    })
+  }, [recordEvent])
 
   /**
    * Reset curriculum progress only: uncheck every subtopic (reversing its
@@ -346,7 +357,7 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
    */
   const resetSyllabusProgress = useCallback(() => {
     setData(prev => {
-      const newData = structuredClone(prev)
+      const newData = structuredClone(prev!)
       for (const module of newData.modules) {
         for (const topic of module.topics) {
           for (const sub of topic.subtopics) {
@@ -377,7 +388,14 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
       }
       return newData
     })
-  }, [])
+    recordEvent({
+      type: 'syllabus.reset',
+      entityType: 'roadmap',
+      entityId: 'all',
+      payload: {},
+      occurredAt: new Date().toISOString(),
+    })
+  }, [recordEvent])
 
   /**
    * Reset study logs only: clear all dailyLogs, studySessions, and the
@@ -386,7 +404,7 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
    */
   const resetLogs = useCallback(() => {
     setData(prev => {
-      const newData = structuredClone(prev)
+      const newData = structuredClone(prev!)
       newData.dailyLogs = []
       newData.studySessions = []
       for (const module of newData.modules) {
@@ -398,33 +416,83 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
       }
       return newData
     })
-  }, [])
+    recordEvent({
+      type: 'logs.reset',
+      entityType: 'roadmap',
+      entityId: 'all',
+      payload: {},
+      occurredAt: new Date().toISOString(),
+    })
+  }, [recordEvent])
 
   const resetData = useCallback(() => {
     const seed = createSeedData()
     setData(seed)
-    saveData(seed)
-  }, [])
+    // Record AFTER the wipe completes so the event survives the store clear
+    // (resetToSeed wipes study_events; the roadmap.reset event must land last).
+    void localDatabase.resetToSeed(seed).then(() => {
+      recordEvent({
+        type: 'roadmap.reset',
+        entityType: 'roadmap',
+        entityId: 'all',
+        payload: {},
+        occurredAt: new Date().toISOString(),
+      })
+    })
+  }, [recordEvent])
+
+  const restoreData = useCallback((next: TrainingData) => {
+    backfillLogIds(next)
+    setData(next)
+    void localDatabase.persistTrainingData(next)
+    recordEvent({
+      type: 'data.imported',
+      entityType: 'system',
+      entityId: 'backup',
+      payload: {},
+      occurredAt: new Date().toISOString(),
+    })
+  }, [recordEvent])
+
+  const value = useMemo<TrainingContextType | null>(() => {
+    if (!ready || !data || !metrics) return null
+    return {
+      data,
+      metrics,
+      allSubtopics,
+      allAssessments,
+      ready,
+      logSession,
+      logStudySession,
+      toggleSubTopic,
+      toggleAssessment,
+      restoreData,
+      recordEvent,
+      resetSyllabusProgress,
+      resetLogs,
+      resetData,
+    }
+  }, [ready, data, metrics, allSubtopics, allAssessments, logSession, logStudySession, toggleSubTopic, toggleAssessment, restoreData, recordEvent, resetSyllabusProgress, resetLogs, resetData])
+
+  if (!value) {
+    return <SplashScreen />
+  }
 
   return (
-    <TrainingContext.Provider
-      value={{
-        data,
-        metrics,
-        allSubtopics,
-        allAssessments,
-        logSession,
-        logStudySession,
-        toggleSubTopic,
-        toggleAssessment,
-        resetSyllabusProgress,
-        resetLogs,
-        resetData,
-      }}
-    >
+    <TrainingContext.Provider value={value}>
       {children}
     </TrainingContext.Provider>
   )
+}
+
+function findModuleName(data: TrainingData | null, subtopicId: string): string | undefined {
+  if (!data) return undefined
+  for (const mod of data.modules) {
+    for (const t of mod.topics) {
+      if (t.subtopics.some(st => st.id === subtopicId)) return mod.name
+    }
+  }
+  return undefined
 }
 
 export function useTraining(): TrainingContextType {

@@ -65,12 +65,46 @@ export interface Module {
 }
 
 export interface DailyLogEntry {
+  /** Stable client-generated id (backfilled on load for legacy data) — enables sync/backup identity */
+  id: string
   date: string
   subtopicId: string
   subtopicName: string
   hours: number
   /** How this time was recorded: 'timer' (manual logging) or 'completion' (auto-credited on topic completion) */
   source?: 'timer' | 'completion'
+}
+
+/**
+ * Immutable, append-only Study Event — the substrate for future analytics,
+ * revision scheduling and AI coaching. Never updated; never feeds the engine.
+ */
+export type StudyEventType =
+  | 'subtopic.completed'
+  | 'subtopic.uncompleted'
+  | 'timer.started'
+  | 'timer.stopped'
+  | 'session.logged'
+  | 'assessment.completed'
+  | 'assessment.uncompleted'
+  | 'revision.done'
+  | 'roadmap.reset'
+  | 'syllabus.reset'
+  | 'logs.reset'
+  | 'data.imported'
+  | 'backup.created'
+  | 'backup.restored'
+
+export interface StudyEvent {
+  id: string
+  type: StudyEventType
+  /** Which kind of entity this event concerns */
+  entityType: 'subtopic' | 'assessment' | 'session' | 'roadmap' | 'system'
+  entityId: string
+  /** Free-form, typed payload (hours, score, source, etc.) */
+  payload: Record<string, unknown>
+  /** ISO timestamp */
+  occurredAt: string
 }
 
 export interface StudySession {

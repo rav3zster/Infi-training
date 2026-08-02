@@ -24,7 +24,7 @@ interface TimerContextType {
 const TimerContext = createContext<TimerContextType | null>(null)
 
 export function TimerProvider({ children }: { children: ReactNode }) {
-  const { logStudySession } = useTraining()
+  const { logStudySession, recordEvent } = useTraining()
 
   const [timerRunning, setTimerRunning] = useState(false)
   const [timerElapsedSeconds, setTimerElapsedSeconds] = useState(0)
@@ -54,7 +54,14 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     setTimerType(params.type)
     setTimerElapsedSeconds(0)
     setTimerRunning(true)
-  }, [])
+    recordEvent({
+      type: 'timer.started',
+      entityType: 'session',
+      entityId: params.subtopicId,
+      payload: { subtopicName: params.subtopicName, type: params.type },
+      occurredAt: new Date().toISOString(),
+    })
+  }, [recordEvent])
 
   const pauseTimer = useCallback(() => setTimerRunning(false), [])
   const resumeTimer = useCallback(() => setTimerRunning(true), [])
@@ -86,8 +93,15 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         durationHours,
         type,
       })
+      recordEvent({
+        type: 'timer.stopped',
+        entityType: 'session',
+        entityId: subId,
+        payload: { elapsedSeconds: elapsed, durationHours, type, subtopicName: subName },
+        occurredAt: new Date().toISOString(),
+      })
     }
-  }, [timerElapsedSeconds, timerSubTopicId, timerSubTopicName, timerModuleName, timerType, logStudySession])
+  }, [timerElapsedSeconds, timerSubTopicId, timerSubTopicName, timerModuleName, timerType, logStudySession, recordEvent])
 
   const cancelTimer = useCallback(() => {
     setTimerRunning(false)
