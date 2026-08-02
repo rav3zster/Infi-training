@@ -4,6 +4,8 @@ import { createSeedData, calculateMetrics, formatDate, getAllSubtopics, getAllAs
 import { localDatabase } from '../services/database/LocalDatabase'
 import { loadLegacyLocalStorage, applyCompletionCredit, backfillLogIds } from '../services/database/legacyMigration'
 import { recordEvent as recordStudyEvent } from '../services/repositories/eventRepository'
+import { enqueueTrainingDiff } from '../services/sync/trainingDiff'
+import { latestTrainingData } from '../services/sync/latestData'
 import { genId } from '../utils/id'
 import SplashScreen from '../components/SplashScreen'
 
@@ -51,11 +53,47 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
   const [data, setData] = useState<TrainingData | null>(null)
   const [ready, setReady] = useState(false)
   const dataRef = useRef<TrainingData | null>(null)
+  const prevDataRef = useRef<TrainingData | null>(null)
   const saveTimer = useRef<number | null>(null)
 
   useEffect(() => {
     dataRef.current = data
   }, [data])
+
+  // Phase 3: mirror the freshest in-memory data for the Sync Engine's merge
+  // base, and diff every change into sync outbox ops (upload only deltas).
+  // The very first hydration sets the baseline without enqueuing anything.
+  useEffect(() => {
+    if (!data) return
+    latestTrainingData.current = data
+    if (prevDataRef.current === null) {
+      prevDataRef.current = data
+      return
+    }
+    const prev = prevDataRef.current
+    prevDataRef.current = data
+    void enqueueTrainingDiff(localDatabase.getDriver(), prev, data).then(ops => {
+      if (ops > 0 && typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('sync:request'))
+      }
+    })
+  }, [data])
+
+  // Phase 3: adopt remote-merged data pushed by the Sync Engine. prevDataRef
+  // is set BEFORE setData so the diff effect sees no change and never
+  // re-uploads what the engine just downloaded.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onRemoteMerge = (e: Event) => {
+      const detail = (e as CustomEvent<TrainingData>).detail
+      if (!detail) return
+      prevDataRef.current = detail
+      latestTrainingData.current = detail
+      setData(detail)
+    }
+    window.addEventListener('training:remote-merge', onRemoteMerge)
+    return () => window.removeEventListener('training:remote-merge', onRemoteMerge)
+  }, [])
 
   // ─── Boot: open DB → migrate → hydrate → legacy migrate → seed ───
   useEffect(() => {
@@ -438,6 +476,10 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
         payload: {},
         occurredAt: new Date().toISOString(),
       })
+      // Phase 3: factory reset must also clear the cloud copy.
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('training:purge'))
+      }
     })
   }, [recordEvent])
 

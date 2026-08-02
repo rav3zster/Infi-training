@@ -1,6 +1,8 @@
 import type { DatabaseDriver } from '../database/driver'
 import type { StudyEvent } from '../../types'
 import { genId } from '../../utils/id'
+import { enqueueOp } from '../sync/outboxRepository'
+import { mapStudyEvent } from '../sync/mappers'
 
 const STORE = 'study_events'
 const MAX_EVENTS = 2000
@@ -8,6 +10,9 @@ const MAX_EVENTS = 2000
 /**
  * Append an immutable study event. Fire-and-forget: callers never await this
  * for UI correctness. Trimmed to MAX_EVENTS newest entries.
+ *
+ * Phase 3: every event is also mirrored to the sync outbox so the Sync Engine
+ * ships it to Supabase.study_events (append-only, deduped by client_id).
  */
 export async function recordEvent(
   driver: DatabaseDriver,
@@ -16,6 +21,7 @@ export async function recordEvent(
   const full: StudyEvent = { ...event, id: genId('evt') }
   try {
     await driver.put(STORE, { id: full.id, data: full as unknown as Record<string, unknown> })
+    await enqueueOp(driver, { table: 'study_events', clientId: full.id, action: 'upsert', payload: mapStudyEvent(full) })
     const count = await driver.count(STORE)
     if (count > MAX_EVENTS) {
       const all = await driver.getAll(STORE)

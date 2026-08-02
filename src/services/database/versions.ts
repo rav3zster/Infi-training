@@ -19,6 +19,7 @@ export const META_KEYS = {
   lastSyncAt: 'last_sync_at',
   lastAutoBackup: 'last_auto_backup',
   userId: 'user_id',
+  syncStats: 'sync_stats',
 } as const
 
 export interface VersionInfo {

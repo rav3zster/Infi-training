@@ -40,8 +40,42 @@ export interface HealthReport {
   storage: 'healthy' | 'degraded' | 'error'
   auth: 'not-configured' | 'healthy' | 'error'
   supabase: 'not-configured' | 'healthy' | 'error'
-  sync: 'idle' | 'syncing' | 'uploading' | 'downloading' | 'offline' | 'error' | 'conflict'
+  sync: 'idle' | 'syncing' | 'preparing' | 'uploading' | 'downloading' | 'merging' | 'completed' | 'retrying' | 'offline' | 'error' | 'conflict'
   detail: string[]
+}
+
+/**
+ * SyncStats — persisted live metrics from the Sync Engine (Phase 3).
+ * Stored as JSON in app_meta under the 'sync_stats' key.
+ */
+export interface SyncStats {
+  lastUploadAt: string | null
+  lastDownloadAt: string | null
+  rowsUploaded: number
+  rowsDownloaded: number
+  failedOps: number
+  retryCount: number
+  avgSyncTimeMs: number | null
+  lastError: string | null
+  currentOp: string | null
+  queueSize: number
+  latencyMs: number | null
+  lastSyncAt: string | null
+}
+
+export const DEFAULT_SYNC_STATS: SyncStats = {
+  lastUploadAt: null,
+  lastDownloadAt: null,
+  rowsUploaded: 0,
+  rowsDownloaded: 0,
+  failedOps: 0,
+  retryCount: 0,
+  avgSyncTimeMs: null,
+  lastError: null,
+  currentOp: null,
+  queueSize: 0,
+  latencyMs: null,
+  lastSyncAt: null,
 }
 
 const MAX_BACKUPS = 5
@@ -386,6 +420,25 @@ export class LocalDatabase {
 
   async setLastSyncAt(ts: string): Promise<void> {
     await this.writeMeta(META_KEYS.lastSyncAt, ts)
+  }
+
+  // ─── Sync engine live stats ────────────────────────────────────────
+
+  async getSyncStats(): Promise<SyncStats> {
+    const raw = await this.readMeta(META_KEYS.syncStats)
+    if (!raw) return { ...DEFAULT_SYNC_STATS }
+    try {
+      return { ...DEFAULT_SYNC_STATS, ...(JSON.parse(raw) as Partial<SyncStats>) }
+    } catch {
+      return { ...DEFAULT_SYNC_STATS }
+    }
+  }
+
+  async updateSyncStats(patch: Partial<SyncStats>): Promise<SyncStats> {
+    const current = await this.getSyncStats()
+    const next = { ...current, ...patch }
+    await this.writeMeta(META_KEYS.syncStats, JSON.stringify(next))
+    return next
   }
 
   // ─── Health ──────────────────────────────────────────────────────────

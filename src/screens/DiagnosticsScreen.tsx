@@ -18,7 +18,7 @@ interface Props {
  * no duplicated state.
  */
 export default function DiagnosticsScreen({ onExit }: Props) {
-  const { status, isOnline, lastSyncAt, syncNow } = useSync()
+  const { status, isOnline, lastSyncAt, syncNow, progress, stats: syncStats } = useSync()
   const { snapshot: auth, isConfigured, refreshSession } = useAuth()
   const [stats, setStats] = useState<DatabaseStats | null>(null)
   const [versions, setVersions] = useState<VersionInfo | null>(null)
@@ -133,12 +133,35 @@ export default function DiagnosticsScreen({ onExit }: Props) {
           <Row label="Access Token Expiry" value={formatEpoch(auth.accessTokenExpiresAt)} />
           <Row label="Refresh Token Expiry" value={formatEpoch(auth.refreshTokenExpiresAt)} />
           <Row label="Last sync" value={lastSyncAt ?? 'never'} />
-          <Row label="Queue size" value={String(stats?.pendingQueue ?? 0)} />
-          <Row label="Pending uploads" value="0" />
-          <Row label="Pending downloads" value="0" />
-          <Row label="Sync errors" value={String(history.filter(h => h.kind === 'error').length)} />
+          <Row label="Queue size" value={String(syncStats?.queueSize ?? 0)} />
+          <Row label="Pending uploads" value={String(syncStats?.queueSize ?? 0)} />
+          <Row label="Pending downloads" value="— (auto-merge)" />
+          <Row label="Last upload" value={syncStats?.lastUploadAt ? new Date(syncStats.lastUploadAt).toLocaleTimeString() : 'never'} />
+          <Row label="Last download" value={syncStats?.lastDownloadAt ? new Date(syncStats.lastDownloadAt).toLocaleTimeString() : 'never'} />
+          <Row label="Rows uploaded" value={String(syncStats?.rowsUploaded ?? 0)} />
+          <Row label="Rows downloaded" value={String(syncStats?.rowsDownloaded ?? 0)} />
+          <Row label="Current operation" value={syncStats?.currentOp ?? (status === 'uploading' ? 'uploading' : status === 'downloading' ? 'downloading' : status === 'merging' ? 'merging' : '—')} />
+          <Row label="Average sync time" value={syncStats?.avgSyncTimeMs != null ? `${syncStats.avgSyncTimeMs}ms` : '—'} />
+          <Row label="Failed operations" value={String(syncStats?.failedOps ?? 0)} />
+          <Row label="Retry count" value={String(syncStats?.retryCount ?? 0)} />
+          <Row label="Supabase latency" value={syncStats?.latencyMs != null ? `${syncStats.latencyMs}ms` : '—'} />
+          <Row label="Last sync error" value={syncStats?.lastError ?? 'none'} />
           <Row label="Sync protocol" value={String(versions?.syncProtocolVersion ?? '—')} />
         </dl>
+        {progress && progress.total > 0 && (
+          <div className="mt-2">
+            <div className="flex items-center justify-between r-text-tiny text-text-secondary mb-1">
+              <span>{progress.phase}… {progress.done}/{progress.total}</span>
+              <span>{progress.percent}%</span>
+            </div>
+            <div className="h-1.5 rounded-full bg-border-color overflow-hidden">
+              <div className="h-full bg-text-primary transition-all duration-300" style={{ width: `${progress.percent}%` }} />
+            </div>
+          </div>
+        )}
+        {syncStats?.lastError && (
+          <p className="r-text-tiny text-red-600 dark:text-red-400 mt-2">Last sync error: {syncStats.lastError}</p>
+        )}
         {auth.error && (
           <p className="r-text-tiny text-red-600 dark:text-red-400 mt-2">Auth error: {auth.error}</p>
         )}

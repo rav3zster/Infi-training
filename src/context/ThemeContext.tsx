@@ -30,6 +30,18 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     } catch {}
   }, [isDark])
 
+  // Phase 3: adopt a theme synced from another device (Sync Engine download).
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onRemoteTheme = (e: Event) => {
+      const theme = (e as CustomEvent<string>).detail
+      if (theme === 'dark') setIsDark(true)
+      else if (theme === 'light') setIsDark(false)
+    }
+    window.addEventListener('training:theme-applied', onRemoteTheme)
+    return () => window.removeEventListener('training:theme-applied', onRemoteTheme)
+  }, [])
+
   const toggleTheme = () => setIsDark(prev => !prev)
 
   return (
