@@ -51,7 +51,8 @@ export class NativeSqliteDriver implements DatabaseDriver {
   }
 
   private parseRow(r: Record<string, unknown>): Record<string, unknown> {
-    return { ...r, data: JSON.parse(String(r.data ?? 'null')) }
+    const parsed = JSON.parse(String(r.data ?? 'null'))
+    return { id: String(r.id), data: parsed }
   }
 
   async getAll(store: string): Promise<Record<string, unknown>[]> {
@@ -68,10 +69,10 @@ export class NativeSqliteDriver implements DatabaseDriver {
   async put(store: string, row: Record<string, unknown>): Promise<void> {
     const id = String(row.id)
     if (!id) throw new Error(`NativeSqliteDriver: row for "${store}" is missing id`)
-    const { id: _drop, ...rest } = row
+    const value = 'data' in row ? row.data : row
     await this.requireDb().run(
       `INSERT OR REPLACE INTO ${store} (id, data) VALUES (?, ?)`,
-      [id, JSON.stringify(rest)],
+      [id, JSON.stringify(value)],
     )
   }
 
@@ -82,10 +83,11 @@ export class NativeSqliteDriver implements DatabaseDriver {
     try {
       for (const row of rows) {
         const id = String(row.id)
-        const { id: _drop, ...rest } = row
+        if (!id) continue
+        const value = 'data' in row ? row.data : row
         await db.run(
           `INSERT OR REPLACE INTO ${store} (id, data) VALUES (?, ?)`,
-          [id, JSON.stringify(rest)],
+          [id, JSON.stringify(value)],
         )
       }
       await db.run('COMMIT')

@@ -35,7 +35,7 @@ interface SyncContextType {
 
 const SyncContext = createContext<SyncContextType | null>(null)
 
-const PERIODIC_MS = 20_000
+const PERIODIC_MS = 3_000
 
 export function SyncProvider({ children }: { children: ReactNode }) {
   const { snapshot: auth } = useAuth()
@@ -134,12 +134,27 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  // ── Periodic background cycle while online ──
+  // ── Periodic background cycle while online + immediate sync on focus/visibility ──
   useEffect(() => {
+    const triggerSync = () => {
+      if (navigator.onLine) getSyncEngine().requestSync(500)
+    }
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') triggerSync()
+    }
+
+    window.addEventListener('focus', triggerSync)
+    document.addEventListener('visibilitychange', onVisibility)
+
     const iv = window.setInterval(() => {
-      if (navigator.onLine) getSyncEngine().requestSync(10_000)
+      if (navigator.onLine) getSyncEngine().requestSync(2_000)
     }, PERIODIC_MS)
-    return () => window.clearInterval(iv)
+
+    return () => {
+      window.removeEventListener('focus', triggerSync)
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.clearInterval(iv)
+    }
   }, [])
 
   const syncNow = useCallback(async () => {

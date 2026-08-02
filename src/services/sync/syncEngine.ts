@@ -118,7 +118,7 @@ export class SyncEngine {
   // ─── Public API ─────────────────────────────────────────────────────
 
   /** Throttled request — coalesces rapid mutations into one cycle. */
-  requestSync(minIntervalMs = 3000): void {
+  requestSync(minIntervalMs = 1000): void {
     const now = Date.now()
     if (this.busy) return
     if (now - this.lastRequestAt < minIntervalMs) return
