@@ -92,27 +92,29 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     return () => realtimeService.unsubscribe()
   }, [authStatus, auth.userId])
 
-  // ── Realtime event from another device → record it + trigger a delta sync ──
+  // ── Remote merge listener (Supabase delta download -> adopt in React state) ──
   useEffect(() => {
     const onRealtime = () => {
-      void localDatabase.updateSyncStats({ lastRealtimeEvent: new Date().toISOString() })
-      // A remote change means the cloud moved past our watermark — pull it now.
-      getSyncEngine().requestSync(1500)
+      // Re-download changes from Supabase when WebSocket event is received
+      if (navigator.onLine) getSyncEngine().requestSync(0)
     }
+    const onPurge = () => {
+      void getSyncEngine().purgeCloudData()
+    }
+
     window.addEventListener('sync:realtime', onRealtime)
-    return () => window.removeEventListener('sync:realtime', onRealtime)
+    window.addEventListener('training:purge', onPurge)
+    return () => {
+      window.removeEventListener('sync:realtime', onRealtime)
+      window.removeEventListener('training:purge', onPurge)
+    }
   }, [])
 
   // ── Local mutation event → background sync (throttled by the engine) ──
   useEffect(() => {
     const onRequest = () => getSyncEngine().requestSync()
-    const onPurge = () => void getSyncEngine().purgeRemote()
     window.addEventListener('sync:request', onRequest)
-    window.addEventListener('training:purge', onPurge)
-    return () => {
-      window.removeEventListener('sync:request', onRequest)
-      window.removeEventListener('training:purge', onPurge)
-    }
+    return () => window.removeEventListener('sync:request', onRequest)
   }, [])
 
   // ── Online / offline ──

@@ -126,6 +126,31 @@ export class SyncEngine {
     void this.syncNow()
   }
 
+  /** Delete all user records from Supabase cloud tables on factory reset. */
+  async purgeCloudData(): Promise<void> {
+    const client = getSupabaseClient()
+    if (!client) return
+    const session = await client.auth.getSession().catch(() => ({ data: { session: null } }))
+    const uid = session.data.session?.user?.id
+    if (!uid) return
+
+    const tables = [
+      'topic_progress',
+      'assessment_progress',
+      'daily_logs',
+      'study_sessions',
+      'study_events',
+      'settings',
+      'backups',
+      'revision_queue',
+    ]
+    for (const table of tables) {
+      await client.from(table).delete().eq('user_id', uid)
+    }
+    await this.deps.driver.clear('sync_outbox')
+    await this.deps.lastSyncAt.set('')
+  }
+
   /**
    * Full sync cycle: upload outbox → download delta + merge → daily cloud
    * backup. Never throws; every failure is captured in the report and the
@@ -356,8 +381,6 @@ export class SyncEngine {
     const remote: Record<string, Record<string, unknown>[]> = {}
     for (let i = 0; i < DOWNLOAD_TABLES.length; i++) {
       const table = DOWNLOAD_TABLES[i]
-      // Delta: only rows changed since the last successful sync (minus a small
-      // overlap window for clock safety). study_events uses occurred_at.
       const deltaColumn = DELTA_COLUMN[table] ?? 'updated_at'
       let query = client.from(table).select('*').eq('user_id', uid)
       if (cutoffIso) {
@@ -380,17 +403,15 @@ export class SyncEngine {
     if (!data) return 0
     data = structuredClone(data)
 
-    // Local-first guard: ANY queued op for a key (including ops in a retry
-    // backoff window, which listPendingOps filters out) means the local change
-    // is unsent and must win over a download. listAllOps covers both.
+    // Local-first guard: ANY queued op for a key means the local change
+    // is unsent and must win over a download.
     const pendingKeys = new Set((await listAllOps(this.deps.driver)).map(op => op.id))
-    const cutoff = lastSyncRaw ? new Date(lastSyncRaw).getTime() : 0
 
     syncStatusService.set('merging', { phase: 'merge', done: 0, total: DOWNLOAD_TABLES.length, percent: 0 })
 
     let applied = 0
-    applied += this.mergeTopicProgress(data, remote.topic_progress ?? [], pendingKeys, cutoff)
-    applied += this.mergeAssessmentProgress(data, remote.assessment_progress ?? [], pendingKeys, cutoff)
+    applied += this.mergeTopicProgress(data, remote.topic_progress ?? [], pendingKeys)
+    applied += this.mergeAssessmentProgress(data, remote.assessment_progress ?? [], pendingKeys)
     applied += this.mergeLogsAndSessions(data, remote)
     applied += await this.mergeStudyEvents(remote.study_events ?? [])
     applied += this.mergeSettings(remote.settings ?? [])
@@ -406,16 +427,14 @@ export class SyncEngine {
   }
 
   /**
-   * Strict LWW for subtopic progress: when the remote row is newer than the
-   * last sync AND there is no unsent local change, apply every field verbatim
-   * (completed, hoursSpent, lastStudied) — a newer remote un-check or lower
-   * hours is respected. No monotonic "max" behavior.
+   * Subtopic progress merge: when there is no unsent local change, adopt
+   * remote completed, hoursSpent, and lastStudied verbatim so tick marks and
+   * hours sync instantly across devices.
    */
   private mergeTopicProgress(
     data: TrainingData,
     rows: Record<string, unknown>[],
     pendingKeys: Set<string>,
-    cutoff: number,
   ): number {
     let applied = 0
     const subs = collectSubtopics(data)
@@ -425,17 +444,13 @@ export class SyncEngine {
       const key = `topic_progress:${subId}`
       // Local-first: an unsent local change always wins over a download.
       if (pendingKeys.has(key)) continue
-      const updatedAt = new Date(String(row.updated_at ?? '')).getTime()
-      if (!Number.isFinite(updatedAt) || updatedAt <= cutoff) continue
+
       const sub = subs.get(subId)
       if (!sub) continue
       const remoteCompleted = Boolean(row.completed)
       const remoteHours = Number(row.hours_spent ?? 0)
       const remoteLast = row.last_studied_at ? String(row.last_studied_at) : ''
-      // LWW: the newer remote row decides `completed` and `lastStudied` verbatim.
-      // hoursSpent is a cumulative counter backed by append-only daily_logs, so
-      // it may only grow (never regress below what was genuinely logged) — a
-      // deliberate safety net against cross-device hour loss.
+
       const nextHours = Math.max(sub.hoursSpent, Math.round(remoteHours * 100) / 100)
       if (
         sub.completed !== remoteCompleted ||
@@ -451,12 +466,11 @@ export class SyncEngine {
     return applied
   }
 
-  /** Strict LWW for assessment progress (completed + score verbatim). */
+  /** Assessment progress merge (completed + score verbatim). */
   private mergeAssessmentProgress(
     data: TrainingData,
     rows: Record<string, unknown>[],
     pendingKeys: Set<string>,
-    cutoff: number,
   ): number {
     let applied = 0
     const assessments = collectAssessments(data)
@@ -465,8 +479,6 @@ export class SyncEngine {
       if (!id) continue
       const key = `assessment_progress:${id}`
       if (pendingKeys.has(key)) continue
-      const updatedAt = new Date(String(row.updated_at ?? '')).getTime()
-      if (!Number.isFinite(updatedAt) || updatedAt <= cutoff) continue
       const a = assessments.get(id)
       if (!a) continue
       const remoteCompleted = Boolean(row.completed)
@@ -530,15 +542,10 @@ export class SyncEngine {
     return applied
   }
 
-  /** Settings: single row per user — apply theme + date offset if changed. */
+  /** Settings: single row per user — apply date offset if changed (theme is device-local). */
   private mergeSettings(rows: Record<string, unknown>[]): number {
     let applied = 0
     for (const row of rows) {
-      const theme = String(row.theme ?? '')
-      if (theme && theme !== this.deps.getTheme()) {
-        this.deps.applyTheme(theme === 'dark' ? 'dark' : 'light')
-        applied++
-      }
       const offset = Number(row.date_offset)
       if (Number.isFinite(offset) && offset !== this.deps.getDateOffset()) {
         this.deps.applyDateOffset(Math.round(offset))
