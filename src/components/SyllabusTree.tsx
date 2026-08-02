@@ -161,11 +161,14 @@ function AssessmentCard({ assessment }: { assessment: Assessment }) {
   )
 }
 
-// ─── Topic Row (expanded card) ───
+import TopicNotesModal from './TopicNotesModal'
+
+// ... in TopicRow ...
 
 function TopicRow({ topic }: { topic: Topic }) {
   const { toggleSubTopic } = useTraining()
   const [expanded, setExpanded] = useState(false)
+  const [notesModalSubtopic, setNotesModalSubtopic] = useState<{ id: string; name: string; notes?: string } | null>(null)
 
   const completedCount = topic.subtopics.filter(s => s.completed).length
   const totalHours = topic.subtopics.reduce((sum, s) => sum + s.hoursSpent, 0)
@@ -311,6 +314,14 @@ function TopicRow({ topic }: { topic: Topic }) {
             </div>
           )}
         </div>
+      )}
+      {notesModalSubtopic && (
+        <TopicNotesModal
+          subtopicId={notesModalSubtopic.id}
+          subtopicName={notesModalSubtopic.name}
+          initialNotes={notesModalSubtopic.notes}
+          onClose={() => setNotesModalSubtopic(null)}
+        />
       )}
     </div>
   )

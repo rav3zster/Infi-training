@@ -3,6 +3,7 @@ import { useTraining } from '../context/TrainingContext'
 import { useTimer } from '../context/TimerContext'
 import { useConfirm } from '../context/ConfirmContext'
 import { useLayout } from '../App'
+import ReadinessWidget from '../components/ReadinessWidget'
 import SmartProgressCircle from '../components/SmartProgressCircle'
 import ForecastCards from '../components/ForecastCards'
 import RoadmapForecast from '../components/RoadmapForecast'
@@ -119,6 +120,9 @@ export default function DashboardScreen() {
           </button>
         </div>
       </header>
+
+      {/* ── Infosys FA1/FA2 Readiness Score Widget ── */}
+      <ReadinessWidget />
 
       {/* ── Hero: Progress Circle + Stats ── */}
       <section

@@ -10,13 +10,14 @@ import { useResponsive } from './hooks/useResponsive'
 import type { LayoutInfo } from './engine/layoutEngine'
 import DashboardScreen from './screens/DashboardScreen'
 import SyllabusScreen from './screens/SyllabusScreen'
+import CalendarPlannerScreen from './screens/CalendarPlannerScreen'
 import LogWorkScreen from './screens/LogWorkScreen'
 import AnalyticsScreen from './screens/AnalyticsScreen'
 import PresetsScreen from './screens/PresetsScreen'
 import DiagnosticsScreen from './screens/DiagnosticsScreen'
 import { localDatabase } from './services/database/LocalDatabase'
 
-export type Screen = 'dashboard' | 'syllabus' | 'logwork' | 'analytics' | 'presets'
+export type Screen = 'dashboard' | 'syllabus' | 'planner' | 'logwork' | 'analytics' | 'presets'
 
 // Context to share layout state without prop drilling
 interface LayoutCtx extends LayoutInfo {}
@@ -86,6 +87,7 @@ function AppRouter() {
         >
           {currentScreen === 'dashboard' && <DashboardScreen />}
           {currentScreen === 'syllabus' && <SyllabusScreen />}
+          {currentScreen === 'planner' && <CalendarPlannerScreen />}
           {currentScreen === 'logwork' && <LogWorkScreen />}
           {currentScreen === 'analytics' && <AnalyticsScreen />}
           {currentScreen === 'presets' && <PresetsScreen />}

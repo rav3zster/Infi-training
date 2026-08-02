@@ -7,7 +7,7 @@
  */
 
 import { useState } from 'react'
-import { LayoutDashboard, BookOpen, Clock, Settings, BarChart3, ChevronLeft, Menu } from 'lucide-react'
+import { LayoutDashboard, BookOpen, Clock, Settings, BarChart3, ChevronLeft, Menu, Calendar } from 'lucide-react'
 
 import type { NavMode } from '../engine/layoutEngine'
 import type { Screen } from '../App'
@@ -21,6 +21,7 @@ interface NavItem {
 const navItems: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'syllabus', label: 'Syllabus', icon: BookOpen },
+  { id: 'planner', label: 'Planner', icon: Calendar },
   { id: 'logwork', label: 'Log Work', icon: Clock },
   { id: 'analytics', label: 'Analytics', icon: BarChart3 },
   { id: 'presets', label: 'Presets', icon: Settings },
