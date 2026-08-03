@@ -53,9 +53,9 @@ function AppRouter() {
 
   // Content padding adapts to nav mode
   const contentPaddingLeft = layout.navMode === 'sidebar'
-    ? `max(env(safe-area-inset-left, 0px), 220px)`  // sidebar width
+    ? `max(env(safe-area-inset-left, 0px), 240px)`  // sidebar width
     : layout.navMode === 'rail'
-      ? `max(env(safe-area-inset-left, 0px), 88px)`  // rail width
+      ? `max(env(safe-area-inset-left, 0px), 80px)`  // rail width
       : `max(env(safe-area-inset-left, 0px), ${layout.contentPaddingX}px)`
 
   const contentPaddingRight = `max(env(safe-area-inset-right, 0px), ${layout.contentPaddingX}px)`

@@ -141,10 +141,10 @@ export default function AdaptiveNavigation({ currentScreen, onNavigate, navMode 
         className={`
           fixed left-0 top-0 bottom-0 z-40
           border-r border-border-color
-          bg-bg-card/90 backdrop-blur-xl
+          bg-bg-card/95 backdrop-blur-xl
           flex flex-col
           transition-all duration-300 ease-out
-          ${sidebarCollapsed ? 'w-0 -translate-x-full overflow-hidden' : 'w-[220px] lg:w-[260px]'}
+          ${sidebarCollapsed ? 'w-0 -translate-x-full overflow-hidden' : 'w-[240px]'}
         `}
       >
         {/* Sidebar header */}
