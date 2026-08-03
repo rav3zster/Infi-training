@@ -162,9 +162,20 @@ export async function countPendingOps(driver: DatabaseDriver): Promise<number> {
   return (await listPendingOps(driver)).length
 }
 
-/** Remove an op after successful upload (or a cancelled delete). */
-export async function removeOp(driver: DatabaseDriver, id: string): Promise<void> {
+/**
+ * Remove an op after successful upload (or a cancelled delete).
+ * Compare-and-delete: if snapshotUpdatedAt is provided and the op was modified
+ * locally while the upload was in-flight, the op is NOT removed.
+ */
+export async function removeOp(driver: DatabaseDriver, id: string, snapshotUpdatedAt?: number): Promise<void> {
   try {
+    if (snapshotUpdatedAt != null) {
+      const current = await readOp(driver, id)
+      if (current && current.updatedAt > snapshotUpdatedAt) {
+        // A newer mutation arrived while the upload request was in-flight. Keep it!
+        return
+      }
+    }
     await driver.delete('sync_outbox', id)
   } catch {
     // best-effort

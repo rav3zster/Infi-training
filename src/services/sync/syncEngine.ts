@@ -335,7 +335,7 @@ export class SyncEngine {
         } else {
           uploaded += batch.length
           lastUploadedLabel = `${table}:${batch[batch.length - 1].clientId}`
-          for (const op of batch) await removeOp(this.deps.driver, op.id)
+          for (const op of batch) await removeOp(this.deps.driver, op.id, op.updatedAt)
         }
         syncStatusService.set('uploading', { phase: 'upload', done, total: pending.length, percent: Math.round((done / pending.length) * 100) })
       }
@@ -358,7 +358,7 @@ export class SyncEngine {
         } else {
           deleted += 1
           lastUploadedLabel = `${table}:${op.clientId}`
-          await removeOp(this.deps.driver, op.id)
+          await removeOp(this.deps.driver, op.id, op.updatedAt)
         }
         syncStatusService.set('uploading', { phase: 'upload', done, total: pending.length, percent: Math.round((done / pending.length) * 100) })
       }
@@ -501,26 +501,48 @@ export class SyncEngine {
     remote: Record<string, Record<string, unknown>[]>,
   ): number {
     let applied = 0
-    const localLogIds = new Set(data.dailyLogs.map(l => l.id))
     for (const row of remote.daily_logs ?? []) {
       const id = String(row.client_id ?? '')
-      if (!id || localLogIds.has(id)) continue
+      if (!id) continue
+      if (row.deleted_at != null) {
+        const idx = data.dailyLogs.findIndex(l => l.id === id)
+        if (idx !== -1) {
+          data.dailyLogs.splice(idx, 1)
+          applied++
+        }
+        continue
+      }
       const log = remoteToDailyLog(row)
       if (!log) continue
-      data.dailyLogs.push(log)
-      localLogIds.add(id)
+      const idx = data.dailyLogs.findIndex(l => l.id === id)
+      if (idx !== -1) {
+        data.dailyLogs[idx] = log
+      } else {
+        data.dailyLogs.push(log)
+      }
       applied++
     }
 
     if (!data.studySessions) data.studySessions = []
-    const localSessionIds = new Set(data.studySessions.map(s => s.id))
     for (const row of remote.study_sessions ?? []) {
       const id = String(row.client_id ?? '')
-      if (!id || localSessionIds.has(id)) continue
+      if (!id) continue
+      if (row.deleted_at != null) {
+        const idx = data.studySessions.findIndex(s => s.id === id)
+        if (idx !== -1) {
+          data.studySessions.splice(idx, 1)
+          applied++
+        }
+        continue
+      }
       const session = remoteToStudySession(row)
       if (!session) continue
-      data.studySessions.push(session)
-      localSessionIds.add(id)
+      const idx = data.studySessions.findIndex(s => s.id === id)
+      if (idx !== -1) {
+        data.studySessions[idx] = session
+      } else {
+        data.studySessions.push(session)
+      }
       applied++
     }
     return applied
