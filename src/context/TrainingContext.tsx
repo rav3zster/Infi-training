@@ -13,11 +13,13 @@ import type {
   SubTopic,
   Assessment,
   SessionType,
+  DailyLogEntry,
+  StudySession,
 } from '../types'
 import { calculateMetrics, getAllSubtopics, formatDate } from '../data/curriculum'
 import SplashScreen from '../components/SplashScreen'
 import { cloudRepository } from '../services/cloud/cloudRepository'
-import { cloudRealtime } from '../services/cloud/cloudRealtime'
+import { cloudRealtime, type RealtimeChangePayload } from '../services/cloud/cloudRealtime'
 
 interface TrainingContextType {
   data: TrainingData
@@ -47,6 +49,191 @@ interface TrainingContextType {
 
 const TrainingContext = createContext<TrainingContextType | null>(null)
 
+// ─── Realtime Patch Helpers ───────────────────────────────────────────────────
+
+/**
+ * Apply a single Realtime CDC payload onto the in-memory TrainingData without
+ * a network round-trip. Falls back gracefully for unknown shapes.
+ */
+function applyRealtimePatch(
+  prev: TrainingData,
+  payload: RealtimeChangePayload,
+): TrainingData {
+  const { table, eventType, new: row, old } = payload
+
+  // ── daily_logs ────────────────────────────────────────────────────────────
+  if (table === 'daily_logs') {
+    const data = structuredClone(prev)
+    const clientId = String(row.client_id ?? old.client_id ?? '')
+    const oldClientId = String(old.client_id ?? '')
+
+    if (eventType === 'INSERT') {
+      const entry: DailyLogEntry = {
+        id: clientId,
+        date: String(row.study_date ?? ''),
+        subtopicId: String(row.subtopic_id ?? ''),
+        subtopicName: String(row.subtopic_name ?? ''),
+        hours: Number(row.hours ?? 0),
+        source: (row.source as DailyLogEntry['source']) ?? 'manual',
+      }
+      // Guard: skip if we already have this entry (our own optimistic write)
+      if (!data.dailyLogs.some(l => l.id === entry.id)) {
+        data.dailyLogs.push(entry)
+        recalcSubtopicHours(data, entry.subtopicId)
+      }
+      return data
+    }
+
+    if (eventType === 'UPDATE') {
+      const idx = data.dailyLogs.findIndex(l => l.id === clientId)
+      if (idx !== -1) {
+        const oldSubtopicId = data.dailyLogs[idx].subtopicId
+        data.dailyLogs[idx] = {
+          ...data.dailyLogs[idx],
+          hours: Number(row.hours ?? data.dailyLogs[idx].hours),
+          subtopicId: String(row.subtopic_id ?? data.dailyLogs[idx].subtopicId),
+          subtopicName: String(row.subtopic_name ?? data.dailyLogs[idx].subtopicName),
+          date: String(row.study_date ?? data.dailyLogs[idx].date),
+        }
+        recalcSubtopicHours(data, oldSubtopicId)
+        recalcSubtopicHours(data, data.dailyLogs[idx].subtopicId)
+      }
+      return data
+    }
+
+    if (eventType === 'DELETE') {
+      const removeId = oldClientId || clientId
+      const idx = data.dailyLogs.findIndex(l => l.id === removeId)
+      if (idx !== -1) {
+        const subtopicId = data.dailyLogs[idx].subtopicId
+        data.dailyLogs.splice(idx, 1)
+        recalcSubtopicHours(data, subtopicId)
+      }
+      return data
+    }
+  }
+
+  // ── study_sessions ────────────────────────────────────────────────────────
+  if (table === 'study_sessions') {
+    const data = structuredClone(prev)
+    const clientId = String(row.client_id ?? old.client_id ?? '')
+    const oldClientId = String(old.client_id ?? '')
+
+    if (!data.studySessions) data.studySessions = []
+
+    if (eventType === 'INSERT') {
+      const session: StudySession = {
+        id: clientId,
+        date: String(row.study_date ?? ''),
+        subtopicId: String(row.subtopic_id ?? ''),
+        subtopicName: String(row.subtopic_name ?? ''),
+        moduleName: String(row.module_name ?? ''),
+        durationHours: Number(row.duration_hours ?? 0),
+        type: (row.session_type as SessionType) ?? 'learning',
+        source: (row.source as StudySession['source']) ?? 'manual',
+      }
+      if (!data.studySessions.some(s => s.id === session.id)) {
+        data.studySessions.push(session)
+      }
+      return data
+    }
+
+    if (eventType === 'UPDATE') {
+      const idx = data.studySessions.findIndex(s => s.id === clientId)
+      if (idx !== -1) {
+        data.studySessions[idx] = {
+          ...data.studySessions[idx],
+          durationHours: Number(row.duration_hours ?? data.studySessions[idx].durationHours),
+          subtopicId: String(row.subtopic_id ?? data.studySessions[idx].subtopicId),
+          subtopicName: String(row.subtopic_name ?? data.studySessions[idx].subtopicName),
+          date: String(row.study_date ?? data.studySessions[idx].date),
+        }
+      }
+      return data
+    }
+
+    if (eventType === 'DELETE') {
+      const removeId = oldClientId || clientId
+      const idx = data.studySessions.findIndex(s => s.id === removeId)
+      if (idx !== -1) data.studySessions.splice(idx, 1)
+      return data
+    }
+  }
+
+  // ── topic_progress ────────────────────────────────────────────────────────
+  if (table === 'topic_progress') {
+    const data = structuredClone(prev)
+    const subtopicId = String(row.subtopic_id ?? old.subtopic_id ?? '')
+
+    for (const m of data.modules) {
+      for (const t of m.topics) {
+        const sub = t.subtopics.find(s => s.id === subtopicId)
+        if (sub) {
+          if (eventType === 'DELETE') {
+            sub.completed = false
+            sub.hoursSpent = 0
+            sub.lastStudied = ''
+          } else {
+            // INSERT or UPDATE
+            sub.completed = Boolean(row.completed)
+            sub.hoursSpent = Number(row.hours_spent ?? sub.hoursSpent)
+            if (row.last_studied_at) sub.lastStudied = String(row.last_studied_at)
+          }
+          break
+        }
+      }
+    }
+    return data
+  }
+
+  // ── assessment_progress ───────────────────────────────────────────────────
+  if (table === 'assessment_progress') {
+    const data = structuredClone(prev)
+    const assessmentId = String(row.assessment_id ?? old.assessment_id ?? '')
+
+    for (const m of data.modules) {
+      const a = m.assessments?.find(x => x.id === assessmentId)
+      if (a) {
+        if (eventType === 'DELETE') {
+          a.completed = false
+          a.score = undefined
+          a.lastAttempted = ''
+        } else {
+          a.completed = Boolean(row.completed)
+          if (row.score != null) a.score = Number(row.score)
+          if (row.last_attempted) a.lastAttempted = String(row.last_attempted)
+        }
+        break
+      }
+    }
+    return data
+  }
+
+  // Unknown table — return unchanged
+  return prev
+}
+
+/** Recalculate hoursSpent for a subtopic from the current dailyLogs array */
+function recalcSubtopicHours(data: TrainingData, subtopicId: string): void {
+  const total = Math.round(
+    data.dailyLogs
+      .filter(l => l.subtopicId === subtopicId)
+      .reduce((s, l) => s + l.hours, 0) * 100,
+  ) / 100
+
+  for (const m of data.modules) {
+    for (const t of m.topics) {
+      const sub = t.subtopics.find(s => s.id === subtopicId)
+      if (sub) {
+        sub.hoursSpent = total
+        return
+      }
+    }
+  }
+}
+
+// ─── Provider ─────────────────────────────────────────────────────────────────
+
 export function TrainingProvider({ children }: { children: ReactNode }) {
   const [data, setData] = useState<TrainingData | null>(null)
   const [ready, setReady] = useState(false)
@@ -66,18 +253,23 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
     void refreshFromCloud()
   }, [refreshFromCloud])
 
-  // Realtime Live Cross-Device Synchronization
+  // Realtime Live Cross-Device Synchronization — surgical in-memory patches
   useEffect(() => {
     if (!ready) return
 
-    const handleRealtimePayload = () => {
-      // Re-read snapshot on remote changes to guarantee 100% convergence across devices
+    const handleRealtimePatch = (payload: RealtimeChangePayload) => {
+      setData(prev => {
+        if (!prev) return prev
+        return applyRealtimePatch(prev, payload)
+      })
+    }
+
+    const handleReconnect = () => {
+      // Full re-fetch ONLY when recovering from a dropped connection
       void refreshFromCloud()
     }
 
-    cloudRealtime.subscribe(handleRealtimePayload, () => {
-      void refreshFromCloud()
-    })
+    cloudRealtime.subscribe(handleRealtimePatch, handleReconnect)
 
     return () => {
       cloudRealtime.unsubscribe()
@@ -100,7 +292,7 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
     return data.modules.flatMap(m => m.assessments ?? [])
   }, [data])
 
-  // Record Study Event (in-memory & direct cloud log)
+  // Record Study Event (no-op in cloud-first; events tracked server-side)
   const recordEvent = useCallback(() => {}, [])
 
   // ── Mutators ──
@@ -146,10 +338,15 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
               }
             } else {
               sub.lastStudied = ''
-              const autoLogIndex = newData.dailyLogs.findIndex(l => l.subtopicId === sub.id && l.source === 'completion')
+              const autoLogIndex = newData.dailyLogs.findIndex(
+                l => l.subtopicId === sub.id && l.source === 'completion',
+              )
               if (autoLogIndex !== -1) {
                 const autoLog = newData.dailyLogs[autoLogIndex]
-                sub.hoursSpent = Math.max(0, Math.round((sub.hoursSpent - autoLog.hours) * 100) / 100)
+                sub.hoursSpent = Math.max(
+                  0,
+                  Math.round((sub.hoursSpent - autoLog.hours) * 100) / 100,
+                )
                 newData.dailyLogs.splice(autoLogIndex, 1)
                 void cloudRepository.deleteLog(autoLog.id)
               }
@@ -160,7 +357,12 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
       }
 
       if (foundSub) {
-        void cloudRepository.toggleSubtopic(foundSub.id, foundSub.completed, foundSub.hoursSpent, foundSub.lastStudied ?? '')
+        void cloudRepository.toggleSubtopic(
+          foundSub.id,
+          foundSub.completed,
+          foundSub.hoursSpent,
+          foundSub.lastStudied ?? '',
+        )
       }
 
       return newData
@@ -342,7 +544,7 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
           for (const sub of topic.subtopics) {
             if (affectedIds.has(sub.id)) {
               sub.hoursSpent = Math.round(
-                newData.dailyLogs.filter(l => l.subtopicId === sub.id).reduce((s, l) => s + l.hours, 0) * 100
+                newData.dailyLogs.filter(l => l.subtopicId === sub.id).reduce((s, l) => s + l.hours, 0) * 100,
               ) / 100
               void cloudRepository.toggleSubtopic(sub.id, sub.completed, sub.hoursSpent, sub.lastStudied ?? '')
             }
@@ -385,7 +587,7 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
           const sub = topic.subtopics.find(s => s.id === subtopicId)
           if (sub) {
             sub.hoursSpent = Math.round(
-              newData.dailyLogs.filter(l => l.subtopicId === subtopicId).reduce((s, l) => s + l.hours, 0) * 100
+              newData.dailyLogs.filter(l => l.subtopicId === subtopicId).reduce((s, l) => s + l.hours, 0) * 100,
             ) / 100
             void cloudRepository.toggleSubtopic(sub.id, sub.completed, sub.hoursSpent, sub.lastStudied ?? '')
           }
@@ -408,7 +610,9 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
             s.completed = false
             s.lastStudied = ''
             s.hoursSpent = Math.round(
-              newData.dailyLogs.filter(l => l.subtopicId === s.id && l.source !== 'completion').reduce((a, l) => a + l.hours, 0) * 100
+              newData.dailyLogs
+                .filter(l => l.subtopicId === s.id && l.source !== 'completion')
+                .reduce((a, l) => a + l.hours, 0) * 100,
             ) / 100
           }
         }
@@ -475,7 +679,12 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
       resetLogs,
       resetData,
     }
-  }, [ready, data, metrics, allSubtopics, allAssessments, logSession, logStudySession, updateLog, deleteLog, toggleSubTopic, toggleAssessment, restoreData, recordEvent, resetSyllabusProgress, resetLogs, resetData])
+  }, [
+    ready, data, metrics, allSubtopics, allAssessments,
+    logSession, logStudySession, updateLog, deleteLog,
+    toggleSubTopic, toggleAssessment, restoreData, recordEvent,
+    resetSyllabusProgress, resetLogs, resetData,
+  ])
 
   if (!value) {
     return <SplashScreen />
