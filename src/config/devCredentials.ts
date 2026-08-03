@@ -1,12 +1,13 @@
 /**
- * DEV-ONLY credential source for one-time bootstrap authentication.
+ * Bootstrap credential source for silent authentication.
  *
- * !!! REPLACE BEFORE RELEASE !!!
- * Replace this with an EdgeFunctionCredentialSource (Phase 2/9) so the
- * permanent account credentials never ship in the application bundle.
+ * Reads VITE_DEV_EMAIL / VITE_DEV_PASSWORD from .env. These values are
+ * inlined by Vite into every build (dev, preview, and production/APK) so
+ * the app can authenticate on all platforms.
  *
- * This module is guarded by import.meta.env.DEV so Vite tree-shakes it out
- * of production builds entirely — the production bundle contains no secrets.
+ * !!! REPLACE BEFORE MULTI-USER RELEASE !!!
+ * Replace with an EdgeFunctionCredentialSource (Phase 2/9) so credentials
+ * are never shipped inside the bundle.
  */
 
 interface Credentials {
@@ -15,11 +16,10 @@ interface Credentials {
 }
 
 /**
- * Returns dev bootstrap credentials when present in the environment,
- * otherwise null. Reads VITE_DEV_EMAIL / VITE_DEV_PASSWORD from .env.
+ * Returns bootstrap credentials when present in the environment, otherwise
+ * null. Reads VITE_DEV_EMAIL / VITE_DEV_PASSWORD from .env.
  */
 export function getDevCredentials(): Credentials | null {
-  if (!import.meta.env.DEV) return null
   const email = import.meta.env.VITE_DEV_EMAIL as string | undefined
   const password = import.meta.env.VITE_DEV_PASSWORD as string | undefined
   if (!email || !password) return null

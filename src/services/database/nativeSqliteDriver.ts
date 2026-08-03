@@ -19,6 +19,8 @@ export class NativeSqliteDriver implements DatabaseDriver {
 
   private conn: SQLiteConnection
   private db: Awaited<ReturnType<SQLiteConnection['retrieveConnection']>> | null = null
+  /** Re-entrancy depth for transaction(). Inner calls are no-ops. */
+  private txDepth = 0
 
   constructor() {
     this.conn = new SQLiteConnection(CapacitorSQLite)
@@ -29,8 +31,14 @@ export class NativeSqliteDriver implements DatabaseDriver {
   }
 
   async open(): Promise<void> {
-    const exists = await CapacitorSQLite.isDBExists({ database: DB_NAME })
-    if (!exists.result) {
+    // Fix P0-02: use isConnection() not isDBExists().
+    // isDBExists() is true on every launch after the first install, so
+    // createConnection() was only called once. retrieveConnection() then
+    // threw on every subsequent launch because no connection existed for
+    // the current process. isConnection() correctly tests the in-process
+    // connection registry.
+    const connected = await this.conn.isConnection(DB_NAME, false)
+    if (!connected.result) {
       await this.conn.createConnection(DB_NAME, false, 'no-encryption', SCHEMA_VERSION, false)
     }
     this.db = await this.conn.retrieveConnection(DB_NAME, false)
@@ -79,7 +87,12 @@ export class NativeSqliteDriver implements DatabaseDriver {
   async putMany(store: string, rows: Record<string, unknown>[]): Promise<void> {
     if (rows.length === 0) return
     const db = this.requireDb()
-    await db.run('BEGIN TRANSACTION')
+    // Fix P0-03: putMany() is always called inside transaction() (via
+    // saveTrainingData). Do NOT issue a nested BEGIN — the outer transaction
+    // already owns commit/rollback. If called standalone (txDepth === 0) we
+    // wrap it ourselves for atomicity.
+    const isNested = this.txDepth > 0
+    if (!isNested) await db.run('BEGIN TRANSACTION')
     try {
       for (const row of rows) {
         const id = String(row.id)
@@ -90,9 +103,9 @@ export class NativeSqliteDriver implements DatabaseDriver {
           [id, JSON.stringify(value)],
         )
       }
-      await db.run('COMMIT')
+      if (!isNested) await db.run('COMMIT')
     } catch (e) {
-      await db.run('ROLLBACK')
+      if (!isNested) await db.run('ROLLBACK')
       throw e
     }
   }
@@ -120,13 +133,21 @@ export class NativeSqliteDriver implements DatabaseDriver {
 
   async transaction<T>(fn: () => Promise<T>): Promise<T> {
     const db = this.requireDb()
-    await db.run('BEGIN TRANSACTION')
+    // Fix P0-03: track nesting depth. Only the outermost call issues
+    // BEGIN/COMMIT/ROLLBACK — inner calls are transparent pass-throughs.
+    // This prevents SQLite from rejecting a nested BEGIN TRANSACTION when
+    // saveTrainingData → transaction() → putMany() → (previously) BEGIN.
+    const isOutermost = this.txDepth === 0
+    if (isOutermost) await db.run('BEGIN TRANSACTION')
+    this.txDepth++
     try {
       const out = await fn()
-      await db.run('COMMIT')
+      this.txDepth--
+      if (isOutermost) await db.run('COMMIT')
       return out
     } catch (e) {
-      await db.run('ROLLBACK')
+      this.txDepth--
+      if (isOutermost) await db.run('ROLLBACK')
       throw e
     }
   }
@@ -178,23 +199,23 @@ export class NativeSqliteDriver implements DatabaseDriver {
     // sync_history, sync_outbox, AI) survive a restore untouched.
     const storeNames = Object.keys(tables).filter(s => STORE_NAMES.includes(s as (typeof STORE_NAMES)[number]))
     if (storeNames.length === 0) return
-    await db.run('BEGIN TRANSACTION')
-    try {
+    // Also fix P0-09 (importAll row-nesting bug): use put() semantics so the
+    // id/data unwrap rule lives in one place and round-trips cleanly.
+    await this.transaction(async () => {
       for (const store of storeNames) {
         await db.run(`DELETE FROM ${store}`)
         for (const row of tables[store] ?? []) {
           const id = String(row.id)
-          const { id: _drop, ...rest } = row
+          if (!id) continue
+          // row already has { id, data: <payload> } shape from exportAll/getAll.
+          // Use the same value-extraction as put() to avoid double-nesting.
+          const value = 'data' in row ? row.data : row
           await db.run(
             `INSERT OR REPLACE INTO ${store} (id, data) VALUES (?, ?)`,
-            [id, JSON.stringify(rest)],
+            [id, JSON.stringify(value)],
           )
         }
       }
-      await db.run('COMMIT')
-    } catch (e) {
-      await db.run('ROLLBACK')
-      throw e
-    }
+    })
   }
 }
