@@ -53,11 +53,18 @@ export async function enqueueTrainingDiff(
     }
   }
 
-  // ── daily_logs: new → upsert, removed → delete ──
+  // ── daily_logs: new or changed → upsert, removed → delete ──
   const prevLogIds = new Set(prev.dailyLogs.map(l => l.id))
   const nextLogIds = new Set(next.dailyLogs.map(l => l.id))
+  const prevLogsById = new Map(prev.dailyLogs.map(l => [l.id, l]))
   for (const log of next.dailyLogs) {
-    if (!prevLogIds.has(log.id)) {
+    const prevLog = prevLogsById.get(log.id)
+    const isNew = !prevLogIds.has(log.id)
+    const isChanged = prevLog &&
+      (prevLog.hours !== log.hours ||
+       prevLog.subtopicId !== log.subtopicId ||
+       prevLog.date !== log.date)
+    if (isNew || isChanged) {
       await enqueueOp(driver, { table: 'daily_logs', clientId: log.id, action: 'upsert', payload: mapDailyLog(log) })
       ops++
     }
@@ -69,13 +76,21 @@ export async function enqueueTrainingDiff(
     }
   }
 
-  // ── study_sessions: new → upsert, removed → delete ──
+  // ── study_sessions: new or changed → upsert, removed → delete ──
   const prevSessions = prev.studySessions ?? []
   const nextSessions = next.studySessions ?? []
   const prevSessionIds = new Set(prevSessions.map(s => s.id))
   const nextSessionIds = new Set(nextSessions.map(s => s.id))
+  const prevSessionsById = new Map(prevSessions.map(s => [s.id, s]))
   for (const session of nextSessions) {
-    if (!prevSessionIds.has(session.id)) {
+    const prevSession = prevSessionsById.get(session.id)
+    const isNew = !prevSessionIds.has(session.id)
+    const isChanged = prevSession &&
+      (prevSession.durationHours !== session.durationHours ||
+       prevSession.subtopicId !== session.subtopicId ||
+       prevSession.date !== session.date ||
+       prevSession.type !== session.type)
+    if (isNew || isChanged) {
       await enqueueOp(driver, { table: 'study_sessions', clientId: session.id, action: 'upsert', payload: mapStudySession(session) })
       ops++
     }

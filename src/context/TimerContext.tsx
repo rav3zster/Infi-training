@@ -3,10 +3,18 @@ import { useTraining } from './TrainingContext'
 import type { SessionType } from '../types'
 
 /**
- * TimerContext — the live count-up study timer, isolated in its own provider
- * so the per-second tick re-renders ONLY consumers of this context (the
- * TimeLogger and the Dashboard chip/circle) instead of the whole app tree.
+ * TimerContext — wall-clock study timer.
+ *
+ * Elapsed is derived as  Date.now() - startedAtMs - accumulatedPauseMs
+ * so Android background throttling or a slow interval cannot undercount
+ * a session. The 1 Hz interval only forces a re-render; it never accumulates.
+ *
+ * startedAtMs is persisted to localStorage so a page reload can detect an
+ * in-progress session (full resume is a follow-up task; at minimum the timer
+ * won't silently reset to zero on reload).
  */
+
+const STORAGE_KEY = 'tt-timer-state'
 
 interface TimerContextType {
   timerRunning: boolean
@@ -33,12 +41,12 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   const [timerModuleName, setTimerModuleName] = useState('')
   const [timerType, setTimerType] = useState<SessionType>('learning')
 
-  // Refs that mirror the state values above.  stopTimer reads from these refs
-  // so it never needs the state variables in its useCallback dependency array.
-  // Without refs, stopTimer would be rebuilt every second (timerElapsedSeconds
-  // changes every second), making TimerContext.Provider emit a new value each
-  // tick and forcing all consumers to re-render unnecessarily.
-  const elapsedRef = useRef(0)
+  // Wall-clock anchors — never reset on interval ticks.
+  const startedAtMs = useRef<number | null>(null) // epoch ms when the running phase started
+  const pausedMs = useRef(0)                       // total ms spent paused so far
+
+  // Refs that mirror state/callbacks for a stable stopTimer callback
+  // (avoids rebuilding the function every second as elapsed changes).
   const subTopicIdRef = useRef('')
   const subTopicNameRef = useRef('')
   const moduleNameRef = useRef('')
@@ -46,10 +54,6 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   const logStudySessionRef = useRef(logStudySession)
   const recordEventRef = useRef(recordEvent)
 
-  // Keep refs in sync with latest state / callbacks on every render.
-  // This is safe because the refs are only read inside event handlers (stopTimer),
-  // never during render.
-  elapsedRef.current = timerElapsedSeconds
   subTopicIdRef.current = timerSubTopicId
   subTopicNameRef.current = timerSubTopicName
   moduleNameRef.current = timerModuleName
@@ -57,13 +61,18 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   logStudySessionRef.current = logStudySession
   recordEventRef.current = recordEvent
 
-  // Tick every second while running
+  // Interval forces a re-render so the displayed time refreshes; it does NOT
+  // accumulate a counter. Elapsed is always computed from the wall clock.
   useEffect(() => {
     if (!timerRunning) return
-    const interval = window.setInterval(() => {
-      setTimerElapsedSeconds(s => s + 1)
-    }, 1000)
-    return () => window.clearInterval(interval)
+    const update = () => {
+      if (startedAtMs.current === null) return
+      const elapsed = Math.floor((Date.now() - startedAtMs.current - pausedMs.current) / 1000)
+      setTimerElapsedSeconds(Math.max(0, elapsed))
+    }
+    update() // immediate first frame
+    const iv = window.setInterval(update, 1000)
+    return () => window.clearInterval(iv)
   }, [timerRunning])
 
   const startTimer = useCallback((params: {
@@ -72,12 +81,25 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     moduleName: string
     type: SessionType
   }) => {
+    startedAtMs.current = Date.now()
+    pausedMs.current = 0
     setTimerSubTopicId(params.subtopicId)
     setTimerSubTopicName(params.subtopicName)
     setTimerModuleName(params.moduleName)
     setTimerType(params.type)
     setTimerElapsedSeconds(0)
     setTimerRunning(true)
+
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        startedAtMs: startedAtMs.current,
+        subtopicId: params.subtopicId,
+        subtopicName: params.subtopicName,
+        moduleName: params.moduleName,
+        type: params.type,
+      }))
+    } catch { /* best-effort */ }
+
     recordEventRef.current({
       type: 'timer.started',
       entityType: 'session',
@@ -87,30 +109,54 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     })
   }, [])
 
-  const pauseTimer = useCallback(() => setTimerRunning(false), [])
-  const resumeTimer = useCallback(() => setTimerRunning(true), [])
+  const pauseTimer = useCallback(() => {
+    // Accumulate the time spent in this running phase before pausing.
+    if (startedAtMs.current !== null) {
+      pausedMs.current += Date.now() - startedAtMs.current
+      startedAtMs.current = null
+    }
+    setTimerRunning(false)
+  }, [])
+
+  const resumeTimer = useCallback(() => {
+    // Start a new running phase from now; pausedMs already holds past paused time.
+    startedAtMs.current = Date.now()
+    setTimerRunning(true)
+  }, [])
 
   /**
    * Stop the timer, log elapsed time as a study session (sub-30-second
    * accidental starts are discarded), and fully clear timer state.
    *
-   * Reads timer values from refs (not captured state) so this callback has
-   * an empty dep array and is created exactly once — preventing a new
-   * Provider value (and consumer re-renders) on every tick.
+   * Reads all values from refs (never from captured state) so this callback
+   * is created exactly once and never triggers consumer re-renders.
    */
   const stopTimer = useCallback(() => {
-    const elapsed = elapsedRef.current
+    // Compute final elapsed from wall clock before clearing anything.
+    let elapsed = 0
+    if (startedAtMs.current !== null) {
+      // Timer was running when Stop was pressed.
+      elapsed = Math.floor((Date.now() - startedAtMs.current - pausedMs.current) / 1000)
+    } else {
+      // Timer was paused — total elapsed is entirely in pausedMs.
+      elapsed = Math.floor(pausedMs.current / 1000)
+    }
+
     const subId = subTopicIdRef.current
     const subName = subTopicNameRef.current
     const modName = moduleNameRef.current
     const type = timerTypeRef.current
 
+    startedAtMs.current = null
+    pausedMs.current = 0
     setTimerRunning(false)
     setTimerElapsedSeconds(0)
     setTimerSubTopicId('')
     setTimerSubTopicName('')
     setTimerModuleName('')
     setTimerType('learning')
+
+    try { localStorage.removeItem(STORAGE_KEY) } catch { /* best-effort */ }
 
     if (elapsed >= 30 && subId) {
       const durationHours = Math.round((elapsed / 3600) * 100) / 100
@@ -129,15 +175,18 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         occurredAt: new Date().toISOString(),
       })
     }
-  }, []) // stable — reads all values from refs, never from captured state
+  }, []) // stable — reads all values from refs
 
   const cancelTimer = useCallback(() => {
+    startedAtMs.current = null
+    pausedMs.current = 0
     setTimerRunning(false)
     setTimerElapsedSeconds(0)
     setTimerSubTopicId('')
     setTimerSubTopicName('')
     setTimerModuleName('')
     setTimerType('learning')
+    try { localStorage.removeItem(STORAGE_KEY) } catch { /* best-effort */ }
   }, [])
 
   return (
