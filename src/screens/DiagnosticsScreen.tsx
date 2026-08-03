@@ -1,78 +1,14 @@
-import { useEffect, useState } from 'react'
-import { ArrowLeft, Database, RefreshCw, HardDrive, ShieldCheck } from 'lucide-react'
-import { localDatabase, type SyncHistoryEntry, type BackupMeta } from '../services/database/LocalDatabase'
-import type { DatabaseStats } from '../services/database/driver'
-import type { VersionInfo } from '../services/database/versions'
-import { useSync } from '../context/SyncContext'
+import { ArrowLeft, Database, ShieldCheck } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
-import type { AuthSnapshot } from '../services/supabase/authService'
+import { useSync } from '../context/SyncContext'
 
 interface Props {
   onExit: () => void
 }
 
-/**
- * DiagnosticsScreen — HIDDEN developer diagnostics page.
- * Reached via ?diag=1 (or 7-taps on the Presets version label). Never in the
- * navigation. Reads everything from the LocalDatabase facade / contexts —
- * no duplicated state.
- */
 export default function DiagnosticsScreen({ onExit }: Props) {
-  const { status, isOnline, lastSyncAt, syncNow, progress, stats: syncStats } = useSync()
-  const { snapshot: auth, isConfigured, refreshSession } = useAuth()
-  const [stats, setStats] = useState<DatabaseStats | null>(null)
-  const [versions, setVersions] = useState<VersionInfo | null>(null)
-  const [history, setHistory] = useState<SyncHistoryEntry[]>([])
-  const [backups, setBackups] = useState<BackupMeta[]>([])
-  const [health, setHealth] = useState<Awaited<ReturnType<typeof localDatabase.healthCheck>> | null>(null)
-  const [refreshTick, setRefreshTick] = useState(0)
-
-  const refresh = () => setRefreshTick(t => t + 1)
-
-  useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      const [s, v, h, bk] = await Promise.all([
-        localDatabase.getStats(),
-        localDatabase.getVersionInfo(),
-        localDatabase.healthCheck(status),
-        localDatabase.listBackups(),
-      ])
-      if (cancelled) return
-      setStats(s)
-      setVersions(v)
-      setHealth(h)
-      setBackups(bk)
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [refreshTick, status])
-
-  useEffect(() => {
-    let cancelled = false
-    localDatabase.getSyncHistory(50).then(h => {
-      if (!cancelled) setHistory(h)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [refreshTick])
-
-  const engine = stats?.engine ?? '—'
-  const version = stats?.version ?? '—'
-
-  const authHealthValue =
-    auth.status === 'not-configured' ? 'not-configured'
-    : auth.status === 'error' ? 'error'
-    : auth.status === 'authenticated' ? 'Authenticated'
-    : auth.status === 'loading' ? 'loading'
-    : 'anonymous'
-  const supabaseHealthValue =
-    !isConfigured ? 'not-configured'
-    : auth.status === 'error' ? 'error'
-    : auth.status === 'authenticated' ? 'Connected'
-    : 'Connected'
+  const { isOnline } = useSync()
+  const { snapshot: auth, isConfigured } = useAuth()
 
   return (
     <div className="min-h-screen bg-bg-primary p-4 sm:p-6 space-y-5" style={{ maxWidth: 960, margin: '0 auto' }}>
@@ -88,231 +24,53 @@ export default function DiagnosticsScreen({ onExit }: Props) {
           </button>
           <div>
             <h1 className="r-text-h1 font-semibold text-text-primary">Developer Diagnostics</h1>
-            <p className="r-text-tiny text-text-secondary">Hidden page — never shown in navigation</p>
+            <p className="r-text-tiny text-text-secondary">Pure Supabase Cloud Architecture Status</p>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={refresh}
-          className="flex items-center gap-1.5 px-3 py-2 r-text-small rounded-lg border border-border-color text-text-primary hover:border-text-secondary transition-colors cursor-pointer"
-        >
-          <RefreshCw size={12} /> Refresh
-        </button>
       </header>
 
-      {/* Health dashboard */}
-      <section className="r-card r-p-card">
-        <div className="flex items-center gap-2 mb-3">
-          <div className="w-7 h-7 rounded-md bg-text-primary flex items-center justify-center"><ShieldCheck size={14} className="text-bg-primary" /></div>
-          <span className="r-text-tiny font-medium text-text-secondary uppercase tracking-wider">Health</span>
+      {/* Cloud Status */}
+      <div className="r-card r-p-card space-y-4">
+        <div className="flex items-center gap-2">
+          <Database size={16} className="text-text-primary" />
+          <h2 className="r-text-h2 font-semibold text-text-primary">Cloud Connection & Auth</h2>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-          <HealthBadge label="Database" value={health?.database ?? '…'} />
-          <HealthBadge label="Storage" value={health?.storage ?? '…'} />
-          <HealthBadge label="Auth" value={authHealthValue} />
-          <HealthBadge label="Supabase" value={supabaseHealthValue} />
-          <HealthBadge label="Sync" value={status} />
-          <HealthBadge label="Network" value={isOnline ? 'online' : 'offline'} />
-        </div>
-        {health && health.detail.length > 0 && (
-          <p className="r-text-tiny text-text-secondary mt-2">{health.detail.join(' · ')}</p>
-        )}
-      </section>
 
-      {/* Session */}
-      <section className="r-card r-p-card">
-        <div className="flex items-center gap-2 mb-3">
-          <div className="w-7 h-7 rounded-md bg-text-primary flex items-center justify-center"><ShieldCheck size={14} className="text-bg-primary" /></div>
-          <span className="r-text-tiny font-medium text-text-secondary uppercase tracking-wider">Session</span>
-        </div>
-        <dl className="r-text-small grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
-          <Row label="Session Status" value={authStatusLabel(auth)} />
-          <Row label="Current User" value={auth.email ?? '—'} />
-          <Row label="Email" value={auth.email ?? '—'} />
-          <Row label="User ID" value={auth.userId ?? '—'} />
-          <Row label="Access Token Expiry" value={formatEpoch(auth.accessTokenExpiresAt)} />
-          <Row label="Refresh Token Expiry" value={formatEpoch(auth.refreshTokenExpiresAt)} />
-          <Row label="Device ID" value={syncStats?.deviceId ?? '—'} />
-          <Row label="Last sync" value={lastSyncAt ?? 'never'} />
-          <Row label="Queue size" value={String(syncStats?.queueSize ?? 0)} />
-          <Row label="Pending uploads" value={String(syncStats?.queueSize ?? 0)} />
-          <Row label="Pending downloads" value="— (auto-merge)" />
-          <Row label="Last upload" value={syncStats?.lastUploadAt ? new Date(syncStats.lastUploadAt).toLocaleTimeString() : 'never'} />
-          <Row label="Last download" value={syncStats?.lastDownloadAt ? new Date(syncStats.lastDownloadAt).toLocaleTimeString() : 'never'} />
-          <Row label="Last uploaded record" value={syncStats?.lastUploadedRecord ?? '—'} />
-          <Row label="Last downloaded record" value={syncStats?.lastDownloadedRecord ?? '—'} />
-          <Row label="Last realtime event" value={syncStats?.lastRealtimeEvent ? new Date(syncStats.lastRealtimeEvent).toLocaleTimeString() : 'never'} />
-          <Row label="Rows uploaded" value={String(syncStats?.rowsUploaded ?? 0)} />
-          <Row label="Rows downloaded" value={String(syncStats?.rowsDownloaded ?? 0)} />
-          <Row label="Upload speed" value={syncStats?.uploadSpeedRowsPerSec != null ? `${syncStats.uploadSpeedRowsPerSec}/s` : '—'} />
-          <Row label="Download speed" value={syncStats?.downloadSpeedRowsPerSec != null ? `${syncStats.downloadSpeedRowsPerSec}/s` : '—'} />
-          <Row label="Current operation" value={syncStats?.currentOp ?? (status === 'uploading' ? 'uploading' : status === 'downloading' ? 'downloading' : status === 'merging' ? 'merging' : '—')} />
-          <Row label="Average sync time" value={syncStats?.avgSyncTimeMs != null ? `${syncStats.avgSyncTimeMs}ms` : '—'} />
-          <Row label="Failed operations" value={String(syncStats?.failedOps ?? 0)} />
-          <Row label="Retry count" value={String(syncStats?.retryCount ?? 0)} />
-          <Row label="Supabase latency" value={syncStats?.latencyMs != null ? `${syncStats.latencyMs}ms` : '—'} />
-          <Row label="Last cloud backup" value={syncStats?.lastCloudBackupAt ? new Date(syncStats.lastCloudBackupAt).toLocaleString() : 'never'} />
-          <Row label="Cloud backups" value={String(syncStats?.cloudBackupCount ?? 0)} />
-          <Row label="Last sync error" value={syncStats?.lastError ?? 'none'} />
-          <Row label="Sync protocol" value={String(versions?.syncProtocolVersion ?? '—')} />
-        </dl>
-        {progress && progress.total > 0 && (
-          <div className="mt-2">
-            <div className="flex items-center justify-between r-text-tiny text-text-secondary mb-1">
-              <span>{progress.phase}… {progress.done}/{progress.total}</span>
-              <span>{progress.percent}%</span>
-            </div>
-            <div className="h-1.5 rounded-full bg-border-color overflow-hidden">
-              <div className="h-full bg-text-primary transition-all duration-300" style={{ width: `${progress.percent}%` }} />
-            </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 r-text-small">
+          <div className="p-3 rounded-lg border border-border-color bg-bg-primary flex justify-between">
+            <span className="text-text-secondary">Network Connection</span>
+            <span className={`font-semibold ${isOnline ? 'text-emerald-500' : 'text-rose-500'}`}>
+              {isOnline ? 'Online' : 'Offline'}
+            </span>
           </div>
-        )}
-        {syncStats?.lastError && (
-          <p className="r-text-tiny text-red-600 dark:text-red-400 mt-2">Last sync error: {syncStats.lastError}</p>
-        )}
-        {auth.error && (
-          <p className="r-text-tiny text-red-600 dark:text-red-400 mt-2">Auth error: {auth.error}</p>
-        )}
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => void syncNow()}
-            className="flex items-center gap-1.5 px-3 py-2 r-text-small font-medium rounded-lg border border-border-color text-text-primary hover:border-text-secondary transition-colors cursor-pointer"
-          >
-            <RefreshCw size={12} /> Sync now
-          </button>
-          <button
-            type="button"
-            onClick={() => void refreshSession()}
-            disabled={!isConfigured}
-            className="flex items-center gap-1.5 px-3 py-2 r-text-small font-medium rounded-lg border border-border-color text-text-primary hover:border-text-secondary transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-border-color"
-          >
-            <RefreshCw size={12} /> Refresh session
-          </button>
-        </div>
-      </section>
-
-      {/* Database */}
-      <section className="r-card r-p-card">
-        <div className="flex items-center gap-2 mb-3">
-          <div className="w-7 h-7 rounded-md bg-text-primary flex items-center justify-center"><Database size={14} className="text-bg-primary" /></div>
-          <span className="r-text-tiny font-medium text-text-secondary uppercase tracking-wider">Database</span>
-        </div>
-        <dl className="r-text-small grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
-          <Row label="Engine" value={engine} />
-          <Row label="Version" value={version} />
-          <Row label="Schema version" value={String(versions?.schemaVersion ?? '—')} />
-          <Row label="Curriculum version" value={String(versions?.curriculumVersion ?? '—')} />
-          <Row label="App version" value={versions?.appVersion ?? '—'} />
-          <Row label="Stores" value={String(stats?.storeCount ?? 0)} />
-          <Row label="Total rows" value={String(stats?.totalRows ?? 0)} />
-          <Row label="Est. size" value={formatBytes(stats?.estimatedBytes ?? 0)} />
-          <Row label="Largest table" value={stats?.largestTable ? `${stats.largestTable.name} (${stats.largestTable.rows})` : '—'} />
-          <Row label="Avg query time" value={`${stats?.averageQueryTimeMs ?? 0}ms`} />
-        </dl>
-
-        <div className="mt-4">
-          <p className="r-text-tiny font-medium text-text-secondary uppercase tracking-wider mb-2">Rows per store</p>
-          <div className="flex flex-wrap gap-1.5">
-            {stats && Object.entries(stats.rowsByStore).map(([name, n]) => (
-              <span key={name} className="px-2 py-1 r-text-tiny rounded-md border border-border-color text-text-secondary">
-                {name}: <span className="text-text-primary font-medium tabular-nums">{n}</span>
-              </span>
-            ))}
+          <div className="p-3 rounded-lg border border-border-color bg-bg-primary flex justify-between">
+            <span className="text-text-secondary">Supabase Configured</span>
+            <span className="font-semibold text-text-primary">{isConfigured ? 'Yes' : 'No'}</span>
+          </div>
+          <div className="p-3 rounded-lg border border-border-color bg-bg-primary flex justify-between">
+            <span className="text-text-secondary">Auth Status</span>
+            <span className="font-semibold text-text-primary">{auth.status}</span>
+          </div>
+          <div className="p-3 rounded-lg border border-border-color bg-bg-primary flex justify-between">
+            <span className="text-text-secondary">User ID</span>
+            <span className="font-mono text-xs text-text-primary truncate max-w-[150px]">
+              {auth.userId ?? 'None'}
+            </span>
           </div>
         </div>
-      </section>
+      </div>
 
-      {/* Sync history */}
-      <section className="r-card r-p-card">
-        <div className="flex items-center gap-2 mb-3">
-          <div className="w-7 h-7 rounded-md bg-text-primary flex items-center justify-center"><HardDrive size={14} className="text-bg-primary" /></div>
-          <span className="r-text-tiny font-medium text-text-secondary uppercase tracking-wider">Sync history</span>
+      {/* Architecture Note */}
+      <div className="r-card r-p-card space-y-2">
+        <div className="flex items-center gap-2">
+          <ShieldCheck size={16} className="text-emerald-500" />
+          <h3 className="r-text-small font-semibold text-text-primary">Pure Cloud-First Engine</h3>
         </div>
-        {history.length === 0 ? (
-          <p className="r-text-small text-text-secondary">No sync activity yet.</p>
-        ) : (
-          <ul className="space-y-1.5 max-h-56 overflow-y-auto">
-            {history.map(h => (
-              <li key={h.id} className="flex items-start justify-between gap-3 r-text-small border-b border-border-color/50 pb-1.5">
-                <span className="text-text-secondary">{h.detail}</span>
-                <span className="text-text-secondary flex-shrink-0">
-                  {h.kind}
-                  {h.rows != null ? ` · ${h.rows}` : ''}
-                  <span className="tabular-nums ml-2">{new Date(h.timestamp).toLocaleTimeString()}</span>
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      {/* Backups */}
-      <section className="r-card r-p-card">
-        <div className="flex items-center gap-2 mb-3">
-          <div className="w-7 h-7 rounded-md bg-text-primary flex items-center justify-center"><HardDrive size={14} className="text-bg-primary" /></div>
-          <span className="r-text-tiny font-medium text-text-secondary uppercase tracking-wider">Backups (auto · keep 5)</span>
-        </div>
-        {backups.length === 0 ? (
-          <p className="r-text-small text-text-secondary">No backups yet — one is created automatically each day.</p>
-        ) : (
-          <ul className="space-y-1.5">
-            {backups.map(b => (
-              <li key={b.id} className="flex items-center justify-between gap-3 r-text-small border-b border-border-color/50 pb-1.5">
-                <span className="text-text-secondary tabular-nums">{new Date(b.exportedAt).toLocaleString()}</span>
-                <span className="text-text-secondary">{b.rows} rows</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+        <p className="r-text-tiny text-text-secondary leading-relaxed">
+          This app runs on a pure Supabase Cloud-First architecture with zero local data persistence.
+          Application state is stored in Postgres, hydrated on mount, and synchronized live across devices via Supabase Realtime WS.
+        </p>
+      </div>
     </div>
   )
-}
-
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between gap-3 border-b border-border-color/40 pb-1">
-      <dt className="text-text-secondary">{label}</dt>
-      <dd className="text-text-primary font-medium tabular-nums text-right break-all">{value}</dd>
-    </div>
-  )
-}
-
-function HealthBadge({ label, value }: { label: string; value: string }) {
-  const color =
-    value === 'healthy' || value === 'online' || value === 'idle'
-      ? 'text-emerald-600 dark:text-emerald-400'
-      : value === 'offline' || value === 'error'
-        ? 'text-red-600 dark:text-red-400'
-        : value === 'not-configured'
-          ? 'text-text-secondary'
-          : 'text-amber-600 dark:text-amber-400'
-  return (
-    <div className="rounded-lg border border-border-color p-2.5 text-center">
-      <p className="r-text-tiny text-text-secondary">{label}</p>
-      <p className={`r-text-small font-semibold ${color}`}>{value}</p>
-    </div>
-  )
-}
-
-function authStatusLabel(auth: AuthSnapshot): string {
-  switch (auth.status) {
-    case 'authenticated': return 'Active'
-    case 'loading': return 'Loading…'
-    case 'anonymous': return 'Anonymous'
-    case 'error': return 'Error'
-    case 'not-configured': return 'Not configured'
-  }
-}
-
-function formatEpoch(epochSeconds: number | null): string {
-  if (epochSeconds == null) return 'n/a'
-  return new Date(epochSeconds * 1000).toLocaleString()
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
 }

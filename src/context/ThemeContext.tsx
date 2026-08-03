@@ -1,5 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
-import { enqueueSettingsSync } from '../services/sync/settingsSync'
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 
 interface ThemeContextType {
   isDark: boolean
@@ -7,7 +6,6 @@ interface ThemeContextType {
 }
 
 const ThemeContext = createContext<ThemeContextType | null>(null)
-
 const STORAGE_KEY = 'training-tracker-theme'
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
@@ -16,12 +14,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       const stored = localStorage.getItem(STORAGE_KEY)
       if (stored !== null) return stored === 'dark'
     } catch {}
-    return window.matchMedia('(prefers-color-scheme: dark)').matches
+    return typeof window !== 'undefined' ? window.matchMedia('(prefers-color-scheme: dark)').matches : true
   })
-
-  // Set true ONLY while adopting a theme pushed by the Sync Engine, so the
-  // enqueue below doesn't echo the same value back to the cloud (no loop).
-  const adoptingRemote = useRef(false)
 
   useEffect(() => {
     const root = document.documentElement
@@ -33,31 +27,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     try {
       localStorage.setItem(STORAGE_KEY, isDark ? 'dark' : 'light')
     } catch {}
-    // Phase 3: enqueue the settings row so the new theme syncs to the cloud
-    // (last-write-wins). Skipped while adopting a remote theme.
-    const wasRemote = adoptingRemote.current
-    adoptingRemote.current = false
-    if (!wasRemote) {
-      void enqueueSettingsSync()
-    }
   }, [isDark])
-
-  // Phase 3: adopt a theme synced from another device (Sync Engine download).
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const onRemoteTheme = (e: Event) => {
-      const theme = (e as CustomEvent<string>).detail
-      if (theme === 'dark') {
-        adoptingRemote.current = true
-        setIsDark(true)
-      } else if (theme === 'light') {
-        adoptingRemote.current = true
-        setIsDark(false)
-      }
-    }
-    window.addEventListener('training:theme-applied', onRemoteTheme)
-    return () => window.removeEventListener('training:theme-applied', onRemoteTheme)
-  }, [])
 
   const toggleTheme = () => setIsDark(prev => !prev)
 

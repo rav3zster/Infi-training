@@ -1,4 +1,4 @@
-import { useState, createContext, useContext, useEffect } from 'react'
+import { useState, createContext, useContext } from 'react'
 import { ThemeProvider } from './context/ThemeContext'
 import { ConfirmProvider } from './context/ConfirmContext'
 import { AuthProvider } from './context/AuthContext'
@@ -15,8 +15,6 @@ import LogWorkScreen from './screens/LogWorkScreen'
 import AnalyticsScreen from './screens/AnalyticsScreen'
 import PresetsScreen from './screens/PresetsScreen'
 import DiagnosticsScreen from './screens/DiagnosticsScreen'
-import { localDatabase } from './services/database/LocalDatabase'
-
 export type Screen = 'dashboard' | 'syllabus' | 'planner' | 'logwork' | 'analytics' | 'presets'
 
 // Context to share layout state without prop drilling
@@ -28,10 +26,6 @@ export function useLayout() {
   return ctx
 }
 
-/**
- * AdaptiveNavigation — Responsive navigation component.
- */
-
 function AppRouter() {
   const [currentScreen, setCurrentScreen] = useState<Screen>('dashboard')
   const { layout } = useResponsive()
@@ -40,12 +34,6 @@ function AppRouter() {
   const [showDiagnostics, setShowDiagnostics] = useState(
     () => new URLSearchParams(window.location.search).has('diag'),
   )
-  useEffect(() => {
-    if (showDiagnostics) {
-      // Prime the facade so diagnostics reads are ready
-      void localDatabase.init()
-    }
-  }, [showDiagnostics])
 
   if (showDiagnostics) {
     return <DiagnosticsScreen onExit={() => setShowDiagnostics(false)} />

@@ -71,8 +71,8 @@ export interface DailyLogEntry {
   subtopicId: string
   subtopicName: string
   hours: number
-  /** How this time was recorded: 'timer' (manual logging) or 'completion' (auto-credited on topic completion) */
-  source?: 'timer' | 'completion'
+  /** How this time was recorded: 'timer', 'completion', or 'manual' */
+  source?: 'timer' | 'completion' | 'manual'
 }
 
 /**
@@ -110,16 +110,16 @@ export interface StudyEvent {
 export interface StudySession {
   id: string
   date: string
-  startTime: string
-  endTime: string
+  startTime?: string
+  endTime?: string
   durationHours: number
   type: SessionType
   subtopicId: string
   subtopicName: string
   moduleName: string
   notes?: string
-  /** How this session was recorded: 'timer' or 'completion' */
-  source?: 'timer' | 'completion'
+  /** How this session was recorded: 'timer', 'completion', or 'manual' */
+  source?: 'timer' | 'completion' | 'manual'
 }
 
 export interface TrainingData {
