@@ -103,9 +103,20 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
       latestTrainingData.current = detail
       setData(detail)
     }
-    window.addEventListener('training:remote-merge', onRemoteMerge)
-    return () => window.removeEventListener('training:remote-merge', onRemoteMerge)
-  }, [])
+      window.addEventListener('training:remote-merge', onRemoteMerge)
+      const onRemotePurge = () => {
+        const seed = createSeedData()
+        prevDataRef.current = seed
+        latestTrainingData.current = seed
+        setData(seed)
+        void localDatabase.resetToSeed(seed)
+      }
+      window.addEventListener('training:remote-purge', onRemotePurge)
+      return () => {
+        window.removeEventListener('training:remote-merge', onRemoteMerge)
+        window.removeEventListener('training:remote-purge', onRemotePurge)
+      }
+    }, [])
 
   // ─── Boot: open DB → migrate → hydrate → legacy migrate → seed ───
   useEffect(() => {
@@ -595,23 +606,15 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
 
   const resetData = useCallback(() => {
     const seed = createSeedData()
+    prevDataRef.current = seed
+    latestTrainingData.current = seed
     setData(seed)
-    // Record AFTER the wipe completes so the event survives the store clear
-    // (resetToSeed wipes study_events; the roadmap.reset event must land last).
     void localDatabase.resetToSeed(seed).then(() => {
-      recordEvent({
-        type: 'roadmap.reset',
-        entityType: 'roadmap',
-        entityId: 'all',
-        payload: {},
-        occurredAt: new Date().toISOString(),
-      })
-      // Phase 3: factory reset must also clear the cloud copy.
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new Event('training:purge'))
       }
     })
-  }, [recordEvent])
+  }, [])
 
   const restoreData = useCallback((next: TrainingData) => {
     backfillLogIds(next)

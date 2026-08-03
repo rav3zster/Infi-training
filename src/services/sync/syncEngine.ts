@@ -418,6 +418,21 @@ export class SyncEngine {
 
     syncStatusService.set('merging', { phase: 'merge', done: DOWNLOAD_TABLES.length, total: DOWNLOAD_TABLES.length, percent: 100 })
 
+    // Check for remote purge (factory reset executed on another device):
+    // If all remote tables are empty, no local ops are pending, and local data has entries
+    const totalRemoteRows = (remote.topic_progress?.length ?? 0) +
+      (remote.daily_logs?.length ?? 0) +
+      (remote.study_sessions?.length ?? 0) +
+      (remote.assessment_progress?.length ?? 0)
+    const hasLocalData = data.dailyLogs.length > 0 ||
+      (data.studySessions?.length ?? 0) > 0 ||
+      data.modules.some(m => m.topics.some(t => t.subtopics.some(s => s.completed || s.hoursSpent > 0)))
+
+    if (totalRemoteRows === 0 && pendingKeys.size === 0 && hasLocalData && cutoffIso && typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('training:remote-purge'))
+      return 0
+    }
+
     if (applied > 0) {
       await this.deps.persist(data)
       this.deps.notifyRemoteMerge(data)
@@ -451,7 +466,7 @@ export class SyncEngine {
       const remoteHours = Number(row.hours_spent ?? 0)
       const remoteLast = row.last_studied_at ? String(row.last_studied_at) : ''
 
-      const nextHours = Math.max(sub.hoursSpent, Math.round(remoteHours * 100) / 100)
+      const nextHours = Math.round(remoteHours * 100) / 100
       if (
         sub.completed !== remoteCompleted ||
         sub.hoursSpent !== nextHours ||

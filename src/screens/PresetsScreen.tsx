@@ -7,11 +7,11 @@ import { calculateMetrics } from '../data/curriculum'
 import { localDatabase } from '../services/database/LocalDatabase'
 import { readDateOffset, writeDateOffset } from '../services/sync/clientSettings'
 import { enqueueSettingsSync } from '../services/sync/settingsSync'
-import { Sun, Moon, Settings, RotateCcw, AlertTriangle, CalendarClock, Download, Upload } from 'lucide-react'
+import { Sun, Moon, Settings, AlertTriangle, CalendarClock, Download, Upload } from 'lucide-react'
 
 export default function PresetsScreen() {
   const { isDark, toggleTheme } = useTheme()
-  const { data, metrics, resetData, restoreData } = useTraining()
+  const { data, metrics, resetData, resetSyllabusProgress, resetLogs, restoreData } = useTraining()
   const confirm = useConfirm()
   const layout = useLayout()
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -19,7 +19,6 @@ export default function PresetsScreen() {
   const [backupError, setBackupError] = useState<string | null>(null)
 
   const [dateOffset, setDateOffset] = useState(() => readDateOffset())
-  const [showResetConfirm, setShowResetConfirm] = useState(false)
 
   // Set true ONLY while adopting a remote offset pushed by the Sync Engine, so
   // the enqueue below doesn't echo the same value back to the cloud (no loop).
@@ -168,34 +167,94 @@ export default function PresetsScreen() {
         )}
       </div>
 
-      {/* Hard Reset */}
+      {/* Danger Zone */}
       <div className="r-card r-p-card">
         <div className="flex items-center gap-2 mb-4">
-          <div className="w-7 h-7 rounded-md bg-text-secondary flex items-center justify-center"><AlertTriangle size={14} className="text-bg-primary" /></div>
+          <div className="w-7 h-7 rounded-md bg-rose-500/10 text-rose-500 flex items-center justify-center flex-shrink-0">
+            <AlertTriangle size={14} />
+          </div>
           <span className="r-text-tiny font-medium text-text-secondary uppercase tracking-wider">Danger Zone</span>
         </div>
-        <p className="r-text-small text-text-secondary mb-4">Wipe all saved progress, logs, and settings. This action is irreversible.</p>
+        <p className="r-text-small text-text-secondary mb-4">
+          Wipe data locally and across all synced devices on Supabase. Choose the specific reset level below:
+        </p>
 
-        {!showResetConfirm ? (
-          <button type="button" onClick={() => setShowResetConfirm(true)}
-            className="flex items-center gap-1.5 px-4 py-2 r-text-small font-medium rounded-md border border-text-secondary text-text-secondary
-              hover:bg-text-primary hover:text-bg-primary hover:border-text-primary transition-all duration-150 cursor-pointer">
-            <RotateCcw size={12} /> Reset All Data
-          </button>
-        ) : (
-          <div className="space-y-3">
-            <div className="flex items-center gap-2 p-3 rounded-md border border-text-secondary/30 bg-bg-primary">
-              <AlertTriangle size={14} className="text-text-secondary flex-shrink-0" />
-              <p className="r-text-small text-text-primary font-medium">Are you sure? This will permanently delete all your study data.</p>
+        <div className="space-y-4">
+          {/* Option 1: Reset All Data */}
+          <div className="p-3.5 rounded-xl border border-border-color bg-bg-primary/50 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="r-text-small font-bold text-text-primary">Reset All Data (Factory Reset)</div>
+              <div className="r-text-tiny text-text-secondary mt-0.5">
+                Wipes all logs, syllabus checkboxes, assessments, and settings locally AND on Supabase. Brand new app across all devices.
+              </div>
             </div>
-            <div className="flex items-center gap-2">
-              <button type="button" onClick={() => { resetData(); setShowResetConfirm(false) }}
-                className="flex items-center gap-1.5 px-4 py-2 r-text-small font-medium rounded-md bg-text-primary text-bg-primary hover:opacity-80 transition-all cursor-pointer"><RotateCcw size={12} /> Confirm Reset</button>
-              <button type="button" onClick={() => setShowResetConfirm(false)}
-                className="px-4 py-2 r-text-small font-medium rounded-md border border-border-color text-text-secondary hover:text-text-primary transition-all cursor-pointer">Cancel</button>
-            </div>
+            <button
+              type="button"
+              onClick={async () => {
+                const ok = await confirm({
+                  title: 'Factory Reset All Data?',
+                  message: 'This will permanently delete all logs, progress, and settings from this device and Supabase cloud. All synced devices will reset to a brand new state.',
+                  confirmLabel: 'Reset Everything',
+                  danger: true,
+                })
+                if (ok) resetData()
+              }}
+              className="px-3.5 py-2 r-text-small font-medium rounded-lg bg-rose-500/10 text-rose-500 border border-rose-500/30 hover:bg-rose-500 hover:text-white transition-all cursor-pointer flex-shrink-0"
+            >
+              Reset All
+            </button>
           </div>
-        )}
+
+          {/* Option 2: Reset Syllabus Progress */}
+          <div className="p-3.5 rounded-xl border border-border-color bg-bg-primary/50 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="r-text-small font-bold text-text-primary">Reset Syllabus Progress Only</div>
+              <div className="r-text-tiny text-text-secondary mt-0.5">
+                Unchecks all topic checkboxes and assessment progress locally AND on Supabase. Your study logs and timer history are kept.
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={async () => {
+                const ok = await confirm({
+                  title: 'Reset Syllabus Progress?',
+                  message: 'All curriculum checkboxes and assessment progress will be reset locally and on Supabase. Your study logs will be preserved.',
+                  confirmLabel: 'Reset Syllabus',
+                  danger: true,
+                })
+                if (ok) resetSyllabusProgress()
+              }}
+              className="px-3.5 py-2 r-text-small font-medium rounded-lg border border-border-color text-text-primary hover:border-text-secondary transition-all cursor-pointer flex-shrink-0"
+            >
+              Reset Syllabus
+            </button>
+          </div>
+
+          {/* Option 3: Reset Logs */}
+          <div className="p-3.5 rounded-xl border border-border-color bg-bg-primary/50 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="r-text-small font-bold text-text-primary">Reset Study Logs Only</div>
+              <div className="r-text-tiny text-text-secondary mt-0.5">
+                Clears all logged sessions and hours locally AND on Supabase. Your topic completion checkboxes are kept.
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={async () => {
+                const ok = await confirm({
+                  title: 'Reset Study Logs?',
+                  message: 'All daily study logs and session history will be cleared locally and on Supabase. Your curriculum progress will be preserved.',
+                  confirmLabel: 'Reset Logs',
+                  danger: true,
+                })
+                if (ok) resetLogs()
+              }}
+              className="px-3.5 py-2 r-text-small font-medium rounded-lg border border-border-color text-text-primary hover:border-text-secondary transition-all cursor-pointer flex-shrink-0"
+            >
+              Reset Logs
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Backup & Restore */}
