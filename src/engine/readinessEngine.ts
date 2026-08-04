@@ -47,14 +47,14 @@ export function calculateReadinessScore(data: TrainingData, metrics: DashboardMe
     }
   })
 
-  // Module scores
+  // Module scores (1 decimal place consistency)
   const genericMod = breakdown.find(b => b.moduleId === 'm1')
   const javaMod = breakdown.find(b => b.moduleId === 'm2')
   const sqlMod = breakdown.find(b => b.moduleId === 'm3')
 
-  const genericScore = Math.round(genericMod?.masteryPercentage ?? 0)
-  const fa1Score = Math.round(javaMod?.masteryPercentage ?? 0)
-  const fa2Score = Math.round(sqlMod?.masteryPercentage ?? 0)
+  const genericScore = Math.round((genericMod?.masteryPercentage ?? 0) * 10) / 10
+  const fa1Score = Math.round((javaMod?.masteryPercentage ?? 0) * 10) / 10
+  const fa2Score = Math.round((sqlMod?.masteryPercentage ?? 0) * 10) / 10
 
   // Overall weighted score
   const totalWeight = breakdown.reduce((s, b) => s + b.weight, 0)
@@ -66,22 +66,42 @@ export function calculateReadinessScore(data: TrainingData, metrics: DashboardMe
   else if (overallReadiness >= 75) status = 'exam-ready'
   else if (overallReadiness >= 40) status = 'getting-there'
 
-  // High-leverage recommendations
+  // High-leverage dynamic recommendations
   const recommendations: ReadinessReport['recommendations'] = []
 
   if (fa1Score < 80 && javaMod) {
+    const javaIncomplete = data.modules
+      .find(m => m.id === 'm2')
+      ?.topics.flatMap(t => t.subtopics)
+      .filter(s => !s.completed) ?? []
+
+    const topicList = javaIncomplete.slice(0, 3).map(s => s.name).join(', ')
+    const actionText = topicList
+      ? `Complete remaining subtopics in Module 2 (${topicList}).`
+      : 'Complete remaining subtopics in Module 2 (Java & OOPs).'
+
     recommendations.push({
       title: 'Focus on FA1 — Java & OOPs',
       impact: '+45% Exam Weight',
-      action: 'Complete remaining subtopics in Module 2 (Java Collections, Exception Handling & OOPs).',
+      action: actionText,
     })
   }
 
   if (fa2Score < 80 && sqlMod) {
+    const sqlIncomplete = data.modules
+      .find(m => m.id === 'm3')
+      ?.topics.flatMap(t => t.subtopics)
+      .filter(s => !s.completed) ?? []
+
+    const topicList = sqlIncomplete.slice(0, 3).map(s => s.name).join(', ')
+    const actionText = topicList
+      ? `Master remaining SQL subtopics (${topicList}).`
+      : 'Master SQL Joins, Sub-queries, and Normalization in Module 3.'
+
     recommendations.push({
       title: 'Focus on FA2 — SQL & Relational Databases',
       impact: '+40% Exam Weight',
-      action: 'Master SQL Joins, Sub-queries, and Normalization in Module 3.',
+      action: actionText,
     })
   }
 

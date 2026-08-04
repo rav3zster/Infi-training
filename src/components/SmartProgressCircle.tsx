@@ -112,7 +112,7 @@ export default function SmartProgressCircle({
           strokeLinecap="round"
           className="progress-glow"
           style={{
-            transition: animate ? 'stroke-dashoffset 50ms linear, stroke 300ms ease' : undefined,
+            transition: 'stroke 300ms ease',
           }}
         />
       </svg>

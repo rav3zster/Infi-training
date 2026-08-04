@@ -46,8 +46,8 @@ export default function ForecastCards({ forecast }: ForecastCardsProps) {
       <ForecastCard
         icon={TrendingDown}
         label="If You Stop Now"
-        value={`${forecast.ifStopNow.toFixed(1)}h`}
-        description={`Tomorrow's target: ${forecast.ifStopNow.toFixed(2)}h`}
+        value={`${forecast.ifStopNow.toFixed(1)}h/day`}
+        description="Required daily pace starting tomorrow"
         color="#f43f5e"
       />
 
@@ -55,8 +55,8 @@ export default function ForecastCards({ forecast }: ForecastCardsProps) {
       <ForecastCard
         icon={Timer}
         label="+30 Minutes More"
-        value={`${forecast.ifExtra30.toFixed(1)}h`}
-        description={`Tomorrow's target: ${forecast.ifExtra30.toFixed(2)}h`}
+        value={`${forecast.ifExtra30.toFixed(1)}h/day`}
+        description="Tomorrow's pace with +30m today"
         color="#f97316"
       />
 
@@ -64,8 +64,8 @@ export default function ForecastCards({ forecast }: ForecastCardsProps) {
       <ForecastCard
         icon={Target}
         label="Finish Today's Goal"
-        value={`${forecast.ifFinishTarget.toFixed(1)}h`}
-        description={`Tomorrow's target: ${forecast.ifFinishTarget.toFixed(2)}h`}
+        value={`${forecast.ifFinishTarget.toFixed(1)}h/day`}
+        description="Tomorrow's pace if goal is completed"
         color="#10b981"
       />
     </div>

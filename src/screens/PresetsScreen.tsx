@@ -242,7 +242,7 @@ export default function PresetsScreen() {
           <div className="w-7 h-7 rounded-md bg-text-primary flex items-center justify-center"><Download size={14} className="text-bg-primary" /></div>
           <span className="r-text-tiny font-medium text-text-secondary uppercase tracking-wider">Backup & Restore</span>
         </div>
-        <p className="r-text-small text-text-secondary mb-4">Export your complete local database as JSON, or restore from a previous backup. Automatic daily backups are kept locally (latest 5).</p>
+        <p className="r-text-small text-text-secondary mb-4">Export your complete database snapshot as JSON, or restore from a previous file. Safety backups are automatically stored to Supabase before reset or restore actions.</p>
 
         <div className="flex flex-wrap items-center gap-2">
           <button type="button" onClick={handleExport}

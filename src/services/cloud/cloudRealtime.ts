@@ -32,6 +32,7 @@ const WATCHED_TABLES: RealtimeTable[] = [
   'assessment_progress',
   'daily_logs',
   'study_sessions',
+  'settings',
 ]
 
 /**

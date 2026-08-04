@@ -61,6 +61,31 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   logStudySessionRef.current = logStudySession
   recordEventRef.current = recordEvent
 
+  // Restore in-progress timer state on page reload
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY)
+      if (!raw) return
+      const saved = JSON.parse(raw)
+      if (saved && saved.startedAtMs && saved.subtopicId) {
+        const elapsed = Math.floor((Date.now() - saved.startedAtMs) / 1000)
+        if (elapsed > 0 && elapsed < 86400) {
+          startedAtMs.current = saved.startedAtMs
+          setTimerSubTopicId(saved.subtopicId)
+          setTimerSubTopicName(saved.subtopicName || '')
+          setTimerModuleName(saved.moduleName || '')
+          setTimerType(saved.type || 'learning')
+          setTimerElapsedSeconds(elapsed)
+          setTimerRunning(true)
+        } else {
+          localStorage.removeItem(STORAGE_KEY)
+        }
+      }
+    } catch {
+      localStorage.removeItem(STORAGE_KEY)
+    }
+  }, [])
+
   // Interval forces a re-render so the displayed time refreshes; it does NOT
   // accumulate a counter. Elapsed is always computed from the wall clock.
   useEffect(() => {

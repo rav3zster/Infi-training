@@ -20,6 +20,7 @@ import { calculateMetrics, getAllSubtopics, formatDate } from '../data/curriculu
 import SplashScreen from '../components/SplashScreen'
 import { cloudRepository } from '../services/cloud/cloudRepository'
 import { cloudRealtime, type RealtimeChangePayload } from '../services/cloud/cloudRealtime'
+import { genId } from '../utils/id'
 
 interface TrainingContextType {
   data: TrainingData
@@ -271,7 +272,17 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
 
     cloudRealtime.subscribe(handleRealtimePatch, handleReconnect)
 
+    const handleResume = () => {
+      if (document.visibilityState === 'visible') {
+        cloudRealtime.subscribe(handleRealtimePatch, handleReconnect)
+        void refreshFromCloud()
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleResume)
+
     return () => {
+      document.removeEventListener('visibilitychange', handleResume)
       cloudRealtime.unsubscribe()
     }
   }, [ready, refreshFromCloud])
@@ -317,14 +328,16 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
                 sub.hoursSpent = autoHours
                 const logId = `auto-${sub.id}`
                 const today = formatDate(new Date())
-                newData.dailyLogs.push({
-                  id: logId,
-                  date: today,
-                  subtopicId: sub.id,
-                  subtopicName: sub.name,
-                  hours: autoHours,
-                  source: 'completion',
-                })
+                if (!newData.dailyLogs.some(l => l.id === logId)) {
+                  newData.dailyLogs.push({
+                    id: logId,
+                    date: today,
+                    subtopicId: sub.id,
+                    subtopicName: sub.name,
+                    hours: autoHours,
+                    source: 'completion',
+                  })
+                }
                 void cloudRepository.logSession({
                   id: logId,
                   subtopicId: sub.id,
@@ -406,7 +419,7 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
       sub.hoursSpent = Math.round((sub.hoursSpent + hours) * 100) / 100
       sub.lastStudied = formatDate(new Date())
       const today = formatDate(new Date())
-      const logId = `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+      const logId = genId('log')
 
       let moduleName = 'General'
       for (const m of newData.modules) {
@@ -462,7 +475,7 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
       }
 
       const today = formatDate(new Date())
-      const logId = `sess-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+      const logId = genId('sess')
 
       newData.dailyLogs.push({
         id: logId,
@@ -650,14 +663,21 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const resetData = useCallback(() => {
+    if (data) {
+      void cloudRepository.createBackup('pre-reset', data)
+    }
     void cloudRepository.resetUserData('all').then(() => {
       void refreshFromCloud()
     })
-  }, [refreshFromCloud])
+  }, [data, refreshFromCloud])
 
   const restoreData = useCallback((next: TrainingData) => {
+    if (data) {
+      void cloudRepository.createBackup('pre-import', data)
+    }
     setData(next)
-  }, [])
+    void cloudRepository.restoreSnapshot(next)
+  }, [data])
 
   const value = useMemo<TrainingContextType | null>(() => {
     if (!ready || !data || !metrics) return null

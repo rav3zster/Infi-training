@@ -105,13 +105,14 @@ export function useResponsive(): ResponsiveState {
   }, [])
 
   useEffect(() => {
-    window.addEventListener('resize', handleResize)
-    window.addEventListener('orientationchange', () => {
+    const handleOrientation = () => {
       setTimeout(handleResize, 150)
-    })
+    }
+    window.addEventListener('resize', handleResize)
+    window.addEventListener('orientationchange', handleOrientation)
     return () => {
       window.removeEventListener('resize', handleResize)
-      window.removeEventListener('orientationchange', handleResize)
+      window.removeEventListener('orientationchange', handleOrientation)
     }
   }, [handleResize])
 
