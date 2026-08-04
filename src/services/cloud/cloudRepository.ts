@@ -91,6 +91,37 @@ export class CloudRepository {
         source: (r.source as 'timer' | 'completion' | 'manual') ?? 'manual',
       }))
 
+      // Purge orphaned completion logs for subtopics that are not marked completed
+      const completedSubtopicIds = new Set<string>()
+      for (const m of seed.modules) {
+        for (const t of m.topics) {
+          for (const s of t.subtopics) {
+            if (s.completed) completedSubtopicIds.add(s.id)
+          }
+        }
+      }
+
+      seed.dailyLogs = seed.dailyLogs.filter(l => {
+        if (l.source === 'completion') {
+          return completedSubtopicIds.has(l.subtopicId)
+        }
+        return true
+      })
+
+      // Recalculate subtopic hoursSpent from verified dailyLogs
+      for (const m of seed.modules) {
+        for (const t of m.topics) {
+          for (const s of t.subtopics) {
+            const subLogs = seed.dailyLogs.filter(l => l.subtopicId === s.id)
+            if (subLogs.length > 0) {
+              s.hoursSpent = Math.round(subLogs.reduce((sum, l) => sum + l.hours, 0) * 100) / 100
+            } else if (!s.completed) {
+              s.hoursSpent = 0
+            }
+          }
+        }
+      }
+
       // Map study sessions
       seed.studySessions = studySessionRows.map(r => ({
         id: String(r.client_id ?? r.id ?? ''),

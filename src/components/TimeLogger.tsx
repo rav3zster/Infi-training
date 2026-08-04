@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from 'react'
 import {
-  Plus, ChevronDown, Play, Pause, Square, Timer, X, Zap,
+  Plus, ChevronDown, Play, Pause, Square, Timer, X, Zap, Maximize2,
 } from 'lucide-react'
 import { useTraining } from '../context/TrainingContext'
 import { useTimer } from '../context/TimerContext'
@@ -27,7 +27,7 @@ function formatElapsed(seconds: number): string {
 export default function TimeLogger() {
   const { data, allSubtopics, logSession, metrics } = useTraining()
   const {
-    timerRunning, timerElapsedSeconds, timerSubTopicId, timerType,
+    timerRunning, timerElapsedSeconds, timerSubTopicId, timerType, openFullScreenTimer,
     startTimer, pauseTimer, resumeTimer, stopTimer, cancelTimer,
   } = useTimer()
 
@@ -101,13 +101,26 @@ export default function TimeLogger() {
         </div>
       </div>
 
-      {/* ── Live timer display ── */}
+      {/* ── Live timer display (Clickable to open Full Screen Timer) ── */}
       <div
-        className={`rounded-lg border p-4 text-center transition-all duration-300 mb-3
+        onClick={() => openFullScreenTimer()}
+        className={`rounded-lg border p-4 text-center transition-all duration-300 mb-3 cursor-pointer group relative hover:border-text-secondary/60
           ${timerRunning
             ? 'border-text-primary/40 bg-bg-primary shadow-sm animate-pulse-soft'
             : 'border-border-color bg-bg-primary'}`}
+        title="Click to open full screen flip-up timer"
       >
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            openFullScreenTimer()
+          }}
+          className="absolute top-2.5 right-2.5 p-1 rounded border border-border-color/60 text-text-secondary hover:text-text-primary hover:border-text-primary transition-all"
+          title="Open Full Screen Timer"
+        >
+          <Maximize2 size={12} />
+        </button>
         <div className="flex items-center justify-center gap-2 text-[10px] uppercase tracking-widest text-text-secondary mb-1">
           {timerRunning ? (
             <>
@@ -121,7 +134,7 @@ export default function TimeLogger() {
             <span className="text-text-secondary">· select a subtopic to begin</span>
           )}
         </div>
-        <div className="text-4xl font-bold tabular-nums text-text-primary tracking-tight font-mono">
+        <div className="text-4xl font-bold tabular-nums text-text-primary tracking-tight font-mono group-hover:scale-105 transition-transform">
           {formatElapsed(timerElapsedSeconds)}
         </div>
         {timerSubTopicId && (

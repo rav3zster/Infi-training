@@ -322,28 +322,44 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
             sub.completed = !sub.completed
             if (sub.completed) {
               sub.lastStudied = formatDate(new Date())
-              if (sub.hoursSpent === 0) {
-                const estimateMinutes = sub.baseEstimateMinutes ?? 30
-                const autoHours = Math.round((estimateMinutes / 60) * 100) / 100
-                sub.hoursSpent = autoHours
+
+              const estimateMinutes = sub.baseEstimateMinutes ?? 30
+              const estimateHours = Math.round((estimateMinutes / 60) * 100) / 100
+
+              const loggedHours = Math.round(
+                newData.dailyLogs
+                  .filter(l => l.subtopicId === sub.id && l.source !== 'completion')
+                  .reduce((sum, l) => sum + l.hours, 0) * 100,
+              ) / 100
+
+              const topUpHours = Math.max(0, Math.round((estimateHours - loggedHours) * 100) / 100)
+              sub.hoursSpent = Math.round((loggedHours + topUpHours) * 100) / 100
+
+              if (topUpHours > 0) {
                 const logId = `auto-${sub.id}`
                 const today = formatDate(new Date())
-                if (!newData.dailyLogs.some(l => l.id === logId)) {
+
+                const existingIdx = newData.dailyLogs.findIndex(l => l.id === logId)
+                if (existingIdx !== -1) {
+                  newData.dailyLogs[existingIdx].hours = topUpHours
+                  newData.dailyLogs[existingIdx].date = today
+                } else {
                   newData.dailyLogs.push({
                     id: logId,
                     date: today,
                     subtopicId: sub.id,
                     subtopicName: sub.name,
-                    hours: autoHours,
+                    hours: topUpHours,
                     source: 'completion',
                   })
                 }
+
                 void cloudRepository.logSession({
                   id: logId,
                   subtopicId: sub.id,
                   subtopicName: sub.name,
                   moduleName: module.name,
-                  durationHours: autoHours,
+                  durationHours: topUpHours,
                   type: 'learning',
                   date: today,
                   source: 'completion',
@@ -356,13 +372,14 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
               )
               if (autoLogIndex !== -1) {
                 const autoLog = newData.dailyLogs[autoLogIndex]
-                sub.hoursSpent = Math.max(
-                  0,
-                  Math.round((sub.hoursSpent - autoLog.hours) * 100) / 100,
-                )
                 newData.dailyLogs.splice(autoLogIndex, 1)
                 void cloudRepository.deleteLog(autoLog.id)
               }
+              sub.hoursSpent = Math.round(
+                newData.dailyLogs
+                  .filter(l => l.subtopicId === sub.id)
+                  .reduce((sum, l) => sum + l.hours, 0) * 100,
+              ) / 100
             }
             break
           }
