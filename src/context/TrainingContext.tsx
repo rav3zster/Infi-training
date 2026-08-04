@@ -177,8 +177,15 @@ function applyRealtimePatch(
           } else {
             // INSERT or UPDATE
             sub.completed = Boolean(row.completed)
-            sub.hoursSpent = Number(row.hours_spent ?? sub.hoursSpent)
             if (row.last_studied_at) sub.lastStudied = String(row.last_studied_at)
+
+            // Recalculate hoursSpent from verified in-memory dailyLogs to prevent transient CDC race flicker
+            const subLogs = data.dailyLogs.filter(l => l.subtopicId === sub.id)
+            if (subLogs.length > 0) {
+              sub.hoursSpent = Math.round(subLogs.reduce((sum, l) => sum + l.hours, 0) * 100) / 100
+            } else {
+              sub.hoursSpent = Number(row.hours_spent ?? sub.hoursSpent)
+            }
           }
           break
         }

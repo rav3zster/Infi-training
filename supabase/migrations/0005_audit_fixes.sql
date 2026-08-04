@@ -3,7 +3,8 @@
 -- ----------------------------------------------------------------------------
 -- 1. Relaxes start_time/end_time NOT NULL on study_sessions for wall-clock free entries.
 -- 2. Expands source CHECK constraints to allow 'manual' entries across daily_logs and study_sessions.
--- 3. Upgrades log_work RPC to write study_sessions atomically alongside daily_logs and topic_progress.
+-- 3. Upgrades log_work RPC to write study_sessions atomically alongside daily_logs,
+--    and derives topic_progress rollup from actual SUM(daily_logs.hours) to prevent double-counting.
 -- 4. Drops legacy unused tables (sync_queue, device_info, app_meta).
 -- ============================================================================
 
@@ -20,7 +21,7 @@ ALTER TABLE public.daily_logs ADD CONSTRAINT daily_logs_source_check CHECK (sour
 ALTER TABLE public.study_sessions DROP CONSTRAINT IF EXISTS study_sessions_source_check;
 ALTER TABLE public.study_sessions ADD CONSTRAINT study_sessions_source_check CHECK (source IN ('timer', 'completion', 'manual'));
 
--- 3. Upgrade log_work RPC to handle atomic multi-table study session & log writes
+-- 3. Upgrade log_work RPC to handle atomic multi-table study session & log writes without double-counting rollup
 CREATE OR REPLACE FUNCTION public.log_work(
   p_client_id     text,
   p_subtopic_id   text,
@@ -59,12 +60,17 @@ BEGIN
         source         = EXCLUDED.source,
         updated_at     = now();
 
-  -- 3.3 Topic progress rollup
+  -- 3.3 Topic progress rollup — derive from SUM(daily_logs.hours) to prevent double-counting race condition
   IF p_subtopic_id IS NOT NULL THEN
     INSERT INTO public.topic_progress (user_id, subtopic_id, hours_spent, last_studied_at)
-    VALUES (auth.uid(), p_subtopic_id, p_hours, p_study_date)
+    VALUES (
+      auth.uid(),
+      p_subtopic_id,
+      (SELECT COALESCE(SUM(hours), 0) FROM public.daily_logs WHERE user_id = auth.uid() AND subtopic_id = p_subtopic_id),
+      p_study_date
+    )
     ON CONFLICT (user_id, subtopic_id) DO UPDATE
-      SET hours_spent     = public.topic_progress.hours_spent + EXCLUDED.hours_spent,
+      SET hours_spent     = (SELECT COALESCE(SUM(hours), 0) FROM public.daily_logs WHERE user_id = auth.uid() AND subtopic_id = p_subtopic_id),
           last_studied_at = GREATEST(public.topic_progress.last_studied_at, EXCLUDED.last_studied_at),
           updated_at      = now();
   END IF;
@@ -72,7 +78,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION public.log_work(text, text, text, numeric, date, text, text, text) IS
-  'Atomically logs study hours across daily_logs and study_sessions, and updates topic progress rollup.';
+  'Atomically logs study hours across daily_logs and study_sessions, and derives accurate topic progress rollup.';
 
 -- 4. Clean up legacy tables from pre-cloud architecture
 DROP TABLE IF EXISTS public.sync_queue CASCADE;
