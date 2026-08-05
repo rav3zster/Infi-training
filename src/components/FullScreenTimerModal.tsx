@@ -35,6 +35,72 @@ function formatElapsed(seconds: number): string {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
 
+/* Flip-clock style digit box — remounts on value change so the tick-pop
+ * animation replays (subtle “heartbeat” while the timer runs). */
+function DigitBox({ value, unit, pop }: { value: string; unit: string; pop: boolean }) {
+  return (
+    <div className="flex flex-col items-center gap-1">
+      <div
+        key={pop ? value : undefined}
+        className="rounded-xl border border-border-color/70 bg-bg-card px-2 sm:px-3 py-1.5 sm:py-2 min-w-[3.2rem] sm:min-w-[4rem] text-center shadow-sm"
+        style={pop ? { animation: 'tick-pop 300ms ease-out' } : undefined}
+      >
+        <span className="text-4xl sm:text-5xl font-black tabular-nums font-mono text-text-primary">
+          {value}
+        </span>
+      </div>
+      <span className="text-[9px] font-bold uppercase tracking-[0.22em] text-text-secondary">{unit}</span>
+    </div>
+  )
+}
+
+function Colon() {
+  return <span className="text-3xl sm:text-4xl font-black text-text-secondary/40 mt-1">:</span>
+}
+
+/* Circular control button with a small label underneath */
+function ControlButton({
+  label,
+  icon,
+  primary,
+  ghost,
+  onClick,
+}: {
+  label: string
+  icon: React.ReactNode
+  primary?: boolean
+  ghost?: boolean
+  onClick: () => void
+}) {
+  return (
+    <div className="flex flex-col items-center gap-1.5">
+      <button
+        type="button"
+        onClick={onClick}
+        title={label}
+        className={`w-16 h-16 sm:w-[4.5rem] sm:h-[4.5rem] rounded-full flex items-center justify-center transition-all duration-200 cursor-pointer active:scale-90
+          ${primary
+            ? 'bg-text-primary text-bg-primary shadow-md hover:opacity-90'
+            : ghost
+              ? 'border border-border-color text-text-secondary hover:text-text-primary hover:border-text-secondary'
+              : 'border border-border-color text-text-primary hover:border-text-secondary'}`}
+      >
+        {icon}
+      </button>
+      <span className="text-[10px] font-semibold text-text-secondary">{label}</span>
+    </div>
+  )
+}
+
+function MiniStat({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
+  return (
+    <div className={`rounded-xl border px-2 py-2 text-center ${highlight ? 'border-accent/40 bg-accent/10' : 'border-border-color/60 bg-bg-primary/50'}`}>
+      <div className={`text-sm font-bold tabular-nums ${highlight ? 'text-accent' : 'text-text-primary'}`}>{value}</div>
+      <div className="text-[9px] uppercase tracking-wider text-text-secondary mt-0.5">{label}</div>
+    </div>
+  )
+}
+
 export default function FullScreenTimerModal() {
   const {
     timerRunning,
@@ -87,6 +153,22 @@ export default function FullScreenTimerModal() {
       hasVibrated.current = false
     }
   }, [isTargetMet, timerRunning, timerElapsedSeconds])
+
+  // Keyboard shortcuts — Space toggles, Escape minimizes
+  useEffect(() => {
+    if (!isFullScreenOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        e.preventDefault()
+        if (timerRunning) pauseTimer()
+        else if (timerElapsedSeconds > 0 || timerSubTopicId) resumeTimer()
+      } else if (e.key === 'Escape') {
+        closeFullScreenTimer()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [isFullScreenOpen, timerRunning, timerElapsedSeconds, timerSubTopicId, pauseTimer, resumeTimer, closeFullScreenTimer])
 
   // Synthetic Ambient Noise Generator (Web Audio API)
   useEffect(() => {
@@ -156,11 +238,24 @@ export default function FullScreenTimerModal() {
   if (!isFullScreenOpen) return null
 
   // SVG Ring Calculations
-  const size = 260
+  const size = 250
   const strokeWidth = 12
   const radius = (size - strokeWidth) / 2
   const circumference = 2 * Math.PI * radius
   const strokeDashoffset = circumference - (progressPercent / 100) * circumference
+
+  const hours = Math.floor(timerElapsedSeconds / 3600)
+  const minutes = Math.floor((timerElapsedSeconds % 3600) / 60)
+  const seconds = timerElapsedSeconds % 60
+
+  const stopAndClose = () => {
+    stopTimer()
+    closeFullScreenTimer()
+  }
+  const discardAndClose = () => {
+    cancelTimer()
+    closeFullScreenTimer()
+  }
 
   return (
     <div
@@ -170,8 +265,15 @@ export default function FullScreenTimerModal() {
         paddingBottom: 'env(safe-area-inset-bottom, 16px)',
       }}
     >
+      {/* Ambient color glow behind the ring */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
+        <div className="absolute -top-28 left-1/2 -translate-x-1/2 w-[520px] h-[520px] rounded-full blur-3xl opacity-25 animate-pulse-soft"
+          style={{ background: isTargetMet ? 'radial-gradient(circle, #10b981 0%, transparent 70%)' : 'radial-gradient(circle, #3b82f6 0%, transparent 70%)' }}
+        />
+      </div>
+
       {/* ── Header ── */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-border-color/40">
+      <div className="relative flex items-center justify-between px-6 py-4 border-b border-border-color/40">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-text-primary flex items-center justify-center text-bg-primary">
             <Clock size={16} />
@@ -226,11 +328,29 @@ export default function FullScreenTimerModal() {
       </div>
 
       {/* ── Main Content Body (Responsive: Portrait Stacked, Landscape Side-by-Side) ── */}
-      <div className="flex-1 flex flex-col md:flex-row landscape:flex-row items-center justify-center p-6 gap-8 max-w-6xl mx-auto w-full">
-        {/* Left / Center Column: Large Progress Ring & Running Digits */}
+      <div className="relative flex-1 flex flex-col md:flex-row landscape:flex-row items-center justify-center p-6 gap-8 max-w-6xl mx-auto w-full">
+        {/* Left / Center Column: Progress Ring + Flip Clock + Controls */}
         <div className="flex flex-col items-center justify-center flex-1">
-          <div className="relative inline-flex items-center justify-center my-4">
+          {/* Progress Ring */}
+          <div className="relative inline-flex items-center justify-center my-3">
             <svg width={size} height={size} className="transform -rotate-90">
+              <defs>
+                <linearGradient id="timerGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                  {isTargetMet ? (
+                    <>
+                      <stop offset="0%" stopColor="#10b981" />
+                      <stop offset="100%" stopColor="#84cc16" />
+                    </>
+                  ) : (
+                    <>
+                      <stop offset="0%" stopColor="#3b82f6" />
+                      <stop offset="50%" stopColor="#8b5cf6" />
+                      <stop offset="100%" stopColor="#22d3ee" />
+                    </>
+                  )}
+                </linearGradient>
+              </defs>
+
               {/* Background Ring */}
               <circle
                 cx={size / 2}
@@ -241,21 +361,44 @@ export default function FullScreenTimerModal() {
                 strokeWidth={strokeWidth}
                 className="text-border-color/40"
               />
-              {/* Animated Progress Ring */}
+
+              {/* Progress Ring — gradient stroke with neon glow */}
               <circle
                 cx={size / 2}
                 cy={size / 2}
                 r={radius}
                 fill="none"
-                stroke={isTargetMet ? '#10b981' : '#3b82f6'}
+                stroke="url(#timerGrad)"
                 strokeWidth={strokeWidth}
                 strokeDasharray={circumference}
                 strokeDashoffset={strokeDashoffset}
                 strokeLinecap="round"
                 className="transition-all duration-500 ease-out"
+                style={{ animation: isTargetMet && timerRunning ? 'glow-pulse 2s ease-in-out infinite' : undefined }}
               />
+
+              {/* Milestone dots at 25 / 50 / 75 / 100% */}
+              {[25, 50, 75, 100].map(pct => {
+                const angle = (pct / 100) * 2 * Math.PI - Math.PI / 2
+                const cx = size / 2 + radius * Math.cos(angle)
+                const cy = size / 2 + radius * Math.sin(angle)
+                const lit = progressPercent >= pct
+                return (
+                  <circle
+                    key={pct}
+                    cx={cx}
+                    cy={cy}
+                    r={5}
+                    fill={lit ? '#10b981' : 'none'}
+                    stroke={lit ? '#10b981' : 'currentColor'}
+                    strokeWidth={2.5}
+                    className={lit ? '' : 'text-border-color/40'}
+                  />
+                )
+              })}
             </svg>
 
+            {/* Ring Center: status + percentage + estimate */}
             <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-4">
               <span className="text-[10px] font-bold text-text-secondary uppercase tracking-widest mb-1">
                 {timerRunning ? (
@@ -268,13 +411,11 @@ export default function FullScreenTimerModal() {
                 )}
               </span>
 
-              {/* Large Display Digits */}
-              <div className="text-4xl sm:text-5xl md:text-6xl font-black tabular-nums tracking-tight text-text-primary font-mono my-1">
-                {formatElapsed(timerElapsedSeconds)}
-              </div>
+              <span className={`text-5xl sm:text-6xl font-black tabular-nums tracking-tight ${isTargetMet ? 'text-emerald-500' : 'text-text-primary'}`}>
+                {progressPercent}%
+              </span>
 
-              {/* Subtopic Estimate & Target Badge */}
-              <div className="flex items-center gap-1.5 mt-2 bg-bg-card border border-border-color/60 px-3 py-1 rounded-full">
+              <div className="flex items-center gap-1.5 mt-3 bg-bg-card border border-border-color/60 px-3 py-1 rounded-full">
                 <Target size={12} className={isTargetMet ? 'text-emerald-500' : 'text-text-secondary'} />
                 <span className="text-xs font-semibold text-text-primary">
                   Est: {formatDuration(estimateMinutes)}
@@ -287,13 +428,48 @@ export default function FullScreenTimerModal() {
               </div>
             </div>
           </div>
+
+          {/* Flip Clock — large segmented time display */}
+          <div className="flex items-start justify-center mt-5">
+            {hours > 0 && (
+              <>
+                <DigitBox value={String(hours).padStart(2, '0')} unit="hrs" pop />
+                <Colon />
+              </>
+            )}
+            <DigitBox value={String(minutes).padStart(2, '0')} unit="min" pop />
+            <Colon />
+            <DigitBox value={String(seconds).padStart(2, '0')} unit="sec" pop />
+          </div>
+
+          {/* Primary Controls */}
+          <div className="flex items-end justify-center gap-4 sm:gap-5 mt-6">
+            {!timerRunning ? (
+              <>
+                <ControlButton label="Resume" primary icon={<Play size={26} />} onClick={resumeTimer} />
+                <ControlButton label="Stop & Log" icon={<Square size={22} />} onClick={stopAndClose} />
+                {timerElapsedSeconds > 0 && (
+                  <ControlButton label="Discard" ghost icon={<RotateCcw size={20} />} onClick={discardAndClose} />
+                )}
+              </>
+            ) : (
+              <>
+                <ControlButton label="Pause" primary icon={<Pause size={26} />} onClick={pauseTimer} />
+                <ControlButton label="Stop & Log" icon={<Square size={22} />} onClick={stopAndClose} />
+              </>
+            )}
+          </div>
+
+          <p className="text-[10px] text-text-secondary mt-4 hidden sm:block">
+            Space to pause · Esc to minimize
+          </p>
         </div>
 
-        {/* Right / Details Column (Hidden in Zen Mode on mobile if compact) */}
+        {/* Right / Details Column (Hidden in Zen Mode) */}
         {!zenMode && (
           <div className="flex flex-col justify-center flex-1 max-w-md w-full bg-bg-card border border-border-color/60 rounded-2xl p-6 shadow-xl">
             {/* Active Subtopic Header */}
-            <div className="mb-6">
+            <div className="mb-5">
               <div className="flex items-center gap-2 text-xs font-bold text-text-secondary uppercase tracking-wider mb-1">
                 <BookOpen size={13} /> Active Study Topic
               </div>
@@ -307,8 +483,19 @@ export default function FullScreenTimerModal() {
               )}
             </div>
 
+            {/* Mini Stats: Elapsed / Estimate / Remaining */}
+            <div className="grid grid-cols-3 gap-2 mb-5">
+              <MiniStat label="Elapsed" value={formatElapsed(timerElapsedSeconds)} />
+              <MiniStat label="Estimate" value={formatDuration(estimateMinutes)} />
+              <MiniStat
+                label="Remaining"
+                value={formatDuration(Math.max(0, estimateMinutes - timerElapsedSeconds / 60))}
+                highlight={isTargetMet}
+              />
+            </div>
+
             {/* Session Type Chips */}
-            <div className="mb-6">
+            <div className="mb-5">
               <span className="text-[11px] font-bold text-text-secondary uppercase tracking-wider block mb-2">
                 Session Category
               </span>
@@ -329,78 +516,22 @@ export default function FullScreenTimerModal() {
             </div>
 
             {/* Target Progress Bar */}
-            <div className="mb-6">
+            <div className="mb-2">
               <div className="flex items-center justify-between text-xs mb-1.5 font-medium">
                 <span className="text-text-secondary">Progress to Estimate</span>
                 <span className="text-text-primary font-bold">{progressPercent}%</span>
               </div>
-              <div className="w-full h-2 rounded-full bg-bg-primary overflow-hidden border border-border-color/40">
+              <div className="w-full h-2.5 rounded-full bg-bg-primary overflow-hidden border border-border-color/40">
                 <div
                   className="h-full rounded-full transition-all duration-500"
                   style={{
                     width: `${progressPercent}%`,
-                    backgroundColor: isTargetMet ? '#10b981' : '#3b82f6',
+                    background: isTargetMet
+                      ? 'linear-gradient(90deg,#10b981,#84cc16)'
+                      : 'linear-gradient(90deg,#3b82f6,#8b5cf6,#22d3ee)',
                   }}
                 />
               </div>
-            </div>
-
-            {/* Primary Action Controls */}
-            <div className="flex flex-wrap items-center gap-3">
-              {!timerRunning ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={resumeTimer}
-                    className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl text-sm font-bold bg-text-primary text-bg-primary hover:opacity-90 active:scale-98 transition-all shadow-md cursor-pointer"
-                  >
-                    <Play size={16} /> Resume
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      stopTimer()
-                      closeFullScreenTimer()
-                    }}
-                    className="flex items-center justify-center gap-2 py-3 px-4 rounded-xl text-sm font-bold border border-border-color hover:border-text-secondary transition-all cursor-pointer text-text-primary"
-                  >
-                    <Square size={14} /> Stop & Log
-                  </button>
-                  {timerElapsedSeconds > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        cancelTimer()
-                        closeFullScreenTimer()
-                      }}
-                      className="p-3 rounded-xl border border-border-color/60 text-text-secondary hover:text-red-500 hover:border-red-500/40 transition-all cursor-pointer"
-                      title="Discard Session"
-                    >
-                      <RotateCcw size={16} />
-                    </button>
-                  )}
-                </>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={pauseTimer}
-                    className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl text-sm font-bold border border-border-color hover:border-text-secondary text-text-primary transition-all cursor-pointer"
-                  >
-                    <Pause size={16} /> Pause
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      stopTimer()
-                      closeFullScreenTimer()
-                    }}
-                    className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl text-sm font-bold bg-text-primary text-bg-primary hover:opacity-90 active:scale-98 transition-all shadow-md cursor-pointer"
-                  >
-                    <Square size={14} /> Stop & Log
-                  </button>
-                </>
-              )}
             </div>
           </div>
         )}

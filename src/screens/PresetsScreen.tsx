@@ -1,15 +1,67 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
-import { useTheme } from '../context/ThemeContext'
+import { useTheme, type ThemeStyle } from '../context/ThemeContext'
 import { useTraining } from '../context/TrainingContext'
 import { useConfirm } from '../context/ConfirmContext'
 import { useLayout } from '../App'
 import { calculateMetrics } from '../data/curriculum'
 import type { TrainingData } from '../types'
 import { readDateOffset, writeDateOffset } from '../services/sync/clientSettings'
-import { Sun, Moon, Settings, AlertTriangle, CalendarClock, Download, Upload } from 'lucide-react'
+import { Sun, Moon, Settings, AlertTriangle, CalendarClock, Download, Upload, Palette, Check } from 'lucide-react'
+
+const THEMES: {
+  id: ThemeStyle
+  name: string
+  desc: string
+  swatches: { background: string; borderColor?: string; boxShadow?: string }[]
+}[] = [
+  {
+    id: 'minimal',
+    name: 'Minimal',
+    desc: 'Clean, calm and premium. The default look.',
+    swatches: [
+      { background: '#f1f5f9', borderColor: '#cbd5e1' },
+      { background: '#ffffff', borderColor: '#cbd5e1' },
+      { background: '#0f172a' },
+      { background: '#2563eb' },
+    ],
+  },
+  {
+    id: 'neobrutalism',
+    name: 'Neobrutalism',
+    desc: 'Bold comic-book energy — hard shadows, black outlines & pop colors.',
+    swatches: [
+      { background: '#fdf7e8', borderColor: '#111111' },
+      { background: '#ffd500', borderColor: '#111111', boxShadow: '2px 2px 0 #111111' },
+      { background: '#3a6ef0', borderColor: '#111111', boxShadow: '2px 2px 0 #111111' },
+      { background: '#f2649a', borderColor: '#111111', boxShadow: '2px 2px 0 #111111' },
+    ],
+  },
+  {
+    id: 'cyberpunk',
+    name: 'Cyberpunk',
+    desc: 'Neon-grid night city — cyan glow & deep space.',
+    swatches: [
+      { background: '#070b18', borderColor: '#22d3ee' },
+      { background: '#111a33', borderColor: '#22d3ee' },
+      { background: '#22d3ee' },
+      { background: '#d926a9' },
+    ],
+  },
+  {
+    id: 'aurora',
+    name: 'Aurora',
+    desc: 'Frosted glass with soft violet light — airy & premium.',
+    swatches: [
+      { background: 'linear-gradient(135deg,#a5b4fc,#e0e7ff)' },
+      { background: 'linear-gradient(135deg,#fbcfe8,#fae8ff)' },
+      { background: '#7c3aed' },
+      { background: '#22d3ee' },
+    ],
+  },
+]
 
 export default function PresetsScreen() {
-  const { isDark, toggleTheme } = useTheme()
+  const { isDark, toggleTheme, style, setStyle } = useTheme()
   const { data, metrics, resetData, resetSyllabusProgress, resetLogs, restoreData } = useTraining()
   const confirm = useConfirm()
   const layout = useLayout()
@@ -144,6 +196,53 @@ export default function PresetsScreen() {
             </div>
           </div>
         )}
+      </div>
+
+      {/* Themes */}
+      <div className="r-card r-p-card">
+        <div className="flex items-center gap-2 mb-4">
+          <div className="w-7 h-7 rounded-md bg-text-primary flex items-center justify-center"><Palette size={14} className="text-bg-primary" /></div>
+          <span className="r-text-tiny font-medium text-text-secondary uppercase tracking-wider">Themes</span>
+        </div>
+        <p className="r-text-small text-text-secondary mb-4">
+          Pick the visual style. Your Dark / Light mode still applies on top of whichever theme you choose.
+        </p>
+
+        <div className="grid gap-3"
+          style={{ gridTemplateColumns: layout.isSpacious ? 'repeat(2, 1fr)' : '1fr' }}
+        >
+          {THEMES.map(t => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setStyle(t.id)}
+              aria-pressed={style === t.id}
+              className={`text-left p-4 rounded-xl border-2 cursor-pointer transition-all duration-200 flex flex-col gap-2.5
+                ${style === t.id
+                  ? 'border-text-primary shadow-[3px_3px_0_rgba(0,0,0,0.25)]'
+                  : 'border-border-color hover:border-text-secondary'}`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="r-text-small font-bold text-text-primary">{t.name}</span>
+                {style === t.id && <Check size={14} className="text-emerald-500" />}
+              </div>
+              <div className="flex items-center gap-1.5">
+                {t.swatches.map((s, i) => (
+                  <span
+                    key={i}
+                    className="w-6 h-6 rounded-md"
+                    style={{
+                      background: s.background,
+                      border: s.borderColor ? `2px solid ${s.borderColor}` : undefined,
+                      boxShadow: s.boxShadow,
+                    }}
+                  />
+                ))}
+              </div>
+              <p className="r-text-tiny text-text-secondary">{t.desc}</p>
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Danger Zone */}
@@ -284,7 +383,7 @@ export default function PresetsScreen() {
           <div className="flex justify-between"><span className="text-text-secondary">Subtopics</span><span className="text-text-primary font-medium">{metrics.totalSubtopics}</span></div>
           <div className="flex justify-between"><span className="text-text-secondary">Joining</span><span className="text-text-primary font-medium">Sep 21, 2026</span></div>
           <div className="flex justify-between"><span className="text-text-secondary">Est. Hours</span><span className="text-text-primary font-medium">{metrics.totalEstimatedHours.toFixed(0)}h</span></div>
-          <div className="flex justify-between"><span className="text-text-secondary">Theme</span><span className="text-text-primary font-medium">{isDark ? 'Dark' : 'Light'}</span></div>
+          <div className="flex justify-between"><span className="text-text-secondary">Theme</span><span className="text-text-primary font-medium">{style.charAt(0).toUpperCase() + style.slice(1)} · {isDark ? 'Dark' : 'Light'}</span></div>
         </div>
       </div>
     </div>

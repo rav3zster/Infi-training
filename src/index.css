@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Archivo+Black&family=Orbitron:wght@500;700;900&family=Sora:wght@400;600;700;800&display=swap');
 @import "tailwindcss";
 
 /* ── Class-based dark mode (Tailwind v4) ── */
@@ -71,6 +72,15 @@
   from { opacity: 0; transform: translateY(16px); }
   to { opacity: 1; transform: translateY(0); }
 }
+@keyframes tick-pop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.07); }
+  100% { transform: scale(1); }
+}
+@keyframes glow-pulse {
+  0%, 100% { filter: drop-shadow(0 0 6px rgba(16, 185, 129, 0.5)); }
+  50% { filter: drop-shadow(0 0 18px rgba(16, 185, 129, 0.9)); }
+}
 
 /* ── Base ── */
 html {
@@ -125,6 +135,209 @@ input[type="range"]::-webkit-slider-thumb {
   border-radius: 50%; background: var(--color-accent); margin-top: -5px;
 }
 
+/* ── Neobrutalism Theme Overrides (comic book vibe) ── */
+
+/* Halftone dot paper */
+html[data-style='neobrutalism'] body {
+  background-image: radial-gradient(rgba(17, 17, 17, 0.26) 1px, transparent 1.6px);
+  background-size: 22px 22px;
+}
+html[data-style='neobrutalism'].dark body {
+  background-image: radial-gradient(rgba(246, 241, 228, 0.18) 1px, transparent 1.6px);
+}
+
+/* Chunky cards — thick ink outline + hard offset shadow (no blur) */
+html[data-style='neobrutalism'] .r-card,
+html[data-style='neobrutalism'].dark .r-card {
+  border: 2px solid var(--color-border-color);
+  border-radius: 0.75rem;
+  box-shadow: 4px 4px 0 var(--color-border-color);
+}
+html[data-style='neobrutalism'] .r-card:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 6px 6px 0 var(--color-border-color);
+}
+
+/* Buttons — hard sticker shadow + comic press-down (bordered buttons only,
+ * so ghost text links like “Clear Logs” stay clean) */
+html[data-style='neobrutalism'] button[class*='border'] {
+  box-shadow: 2px 2px 0 var(--color-border-color);
+}
+html[data-style='neobrutalism'] button[class*='border']:active {
+  transform: translate(2px, 2px);
+  box-shadow: 0 0 0 var(--color-border-color);
+}
+
+/* Respect reduced-motion — no hover lift or press-down */
+@media (prefers-reduced-motion: reduce) {
+  html[data-style='neobrutalism'] .r-card:hover {
+    transform: none;
+    box-shadow: 4px 4px 0 var(--color-border-color);
+  }
+  html[data-style='neobrutalism'] button[class*='border']:active {
+    transform: none;
+    box-shadow: 2px 2px 0 var(--color-border-color);
+  }
+}
+
+/* Yellow accent chip stays readable (black on comic yellow) */
+html[data-style='neobrutalism'] .bg-accent,
+html[data-style='neobrutalism'].dark .bg-accent {
+  color: #111111;
+}
+
+/* Comic selection */
+html[data-style='neobrutalism'] ::selection {
+  background: #ffd500;
+  color: #111111;
+}
+
+/* ── Neobrutalism LIGHT — comic-book color variant ──
+ * Only applies when the page is NOT in dark mode. The dark variant keeps
+ * its inverted black-on-cream identity.
+ */
+html[data-style='neobrutalism']:not(.dark) {
+  --color-bg-primary: #fdf7e8;      /* warm comic paper */
+  --color-bg-secondary: #fbe9b7;    /* sun-yellow paper */
+  --color-text-primary: #171207;    /* warm ink */
+  --color-text-secondary: #7a4f22;  /* comic caramel narration */
+  --color-accent: #ffc400;          /* sun-yellow (keeps black-on-yellow readable) */
+  --color-accent-hover: #f0b400;
+}
+
+/* Section + stat-card labels → comic blue (labels sit at two possible depths) */
+html[data-style='neobrutalism']:not(.dark) .r-card > div > span.uppercase,
+html[data-style='neobrutalism']:not(.dark) .r-card > div > div > span.uppercase {
+  color: #3a6ef0;
+}
+
+/* Header icon chips → comic sun-yellow with ink icons */
+html[data-style='neobrutalism']:not(.dark) .r-card > div > div[class*='bg-text-primary'] {
+  background-color: #ffd500;
+}
+html[data-style='neobrutalism']:not(.dark) .r-card > div > div[class*='bg-text-primary'] svg {
+  color: #171207;
+}
+
+/* Comic poster drop-shadow behind display headings */
+html[data-style='neobrutalism']:not(.dark) h1,
+html[data-style='neobrutalism']:not(.dark) h2,
+html[data-style='neobrutalism']:not(.dark) h3 {
+  text-shadow: 2px 2px 0 rgba(255, 213, 0, 0.45);
+}
+
+/* Inner boxes (pills, dropdowns, progress tracks, selected rows) → sun-yellow
+ * comic fill. Safe: the app background no longer carries bg-bg-primary. */
+html[data-style='neobrutalism']:not(.dark) .bg-bg-primary {
+  background-color: #fbe9b7;
+}
+
+/* Comic blue scrollbar thumb */
+html[data-style='neobrutalism']:not(.dark) ::-webkit-scrollbar-thumb {
+  background: #3a6ef0;
+}
+
+/* ── Cyberpunk Overrides (neon grid) ── */
+html[data-style='cyberpunk'] body {
+  background-image:
+    linear-gradient(rgba(8, 145, 178, 0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(8, 145, 178, 0.07) 1px, transparent 1px);
+  background-size: 44px 44px;
+}
+html[data-style='cyberpunk'].dark body {
+  background-image:
+    linear-gradient(rgba(34, 211, 238, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(34, 211, 238, 0.06) 1px, transparent 1px);
+}
+
+html[data-style='cyberpunk'] .r-card,
+html[data-style='cyberpunk'].dark .r-card {
+  border: 1px solid rgba(34, 211, 238, 0.35);
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.08), 0 0 22px rgba(34, 211, 238, 0.10);
+}
+html[data-style='cyberpunk'] .r-card:hover {
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.22), 0 0 34px rgba(34, 211, 238, 0.25);
+}
+html[data-style='cyberpunk'] button[class*='border']:hover {
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.35);
+}
+
+html[data-style='cyberpunk'] ::selection {
+  background: #22d3ee;
+  color: #070b18;
+}
+
+/* ── Aurora Overrides (frosted glass) ── */
+html[data-style='aurora'] body {
+  background-color: #eef1ff;
+  background-image:
+    radial-gradient(at 15% 0%, rgba(139, 92, 246, 0.14) 0px, transparent 55%),
+    radial-gradient(at 85% 8%, rgba(34, 211, 238, 0.14) 0px, transparent 55%),
+    radial-gradient(at 50% 100%, rgba(236, 72, 153, 0.12) 0px, transparent 55%);
+}
+html[data-style='aurora'].dark body {
+  background-color: #0c0e1f;
+  background-image:
+    radial-gradient(at 15% 0%, rgba(139, 92, 246, 0.20) 0px, transparent 55%),
+    radial-gradient(at 85% 8%, rgba(34, 211, 238, 0.14) 0px, transparent 55%),
+    radial-gradient(at 50% 100%, rgba(236, 72, 153, 0.14) 0px, transparent 55%);
+}
+
+html[data-style='aurora'] .r-card,
+html[data-style='aurora'].dark .r-card {
+  background: rgba(255, 255, 255, 0.62);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.75);
+  box-shadow: 0 8px 32px rgba(99, 102, 241, 0.14);
+}
+html[data-style='aurora'].dark .r-card {
+  background: rgba(28, 32, 64, 0.66);
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+}
+
+html[data-style='aurora'] ::selection {
+  background: #7c3aed;
+  color: #ffffff;
+}
+html[data-style='aurora'].dark ::selection {
+  background: #a78bfa;
+  color: #0c0e1f;
+}
+
+/* ── Theme Display Type (comic / neon / soft) ── */
+html[data-style='neobrutalism'] h1,
+html[data-style='neobrutalism'] h2,
+html[data-style='neobrutalism'] h3,
+html[data-style='neobrutalism'] .r-text-hero,
+html[data-style='neobrutalism'] .r-text-h1,
+html[data-style='neobrutalism'] .r-text-h2,
+html[data-style='neobrutalism'] .r-text-data {
+  font-family: 'Archivo Black', 'Inter', system-ui, sans-serif;
+  letter-spacing: 0.01em;
+}
+html[data-style='cyberpunk'] h1,
+html[data-style='cyberpunk'] h2,
+html[data-style='cyberpunk'] h3,
+html[data-style='cyberpunk'] .r-text-hero,
+html[data-style='cyberpunk'] .r-text-h1,
+html[data-style='cyberpunk'] .r-text-h2,
+html[data-style='cyberpunk'] .r-text-data {
+  font-family: 'Orbitron', 'Inter', system-ui, sans-serif;
+  letter-spacing: 0.04em;
+}
+html[data-style='aurora'] h1,
+html[data-style='aurora'] h2,
+html[data-style='aurora'] h3,
+html[data-style='aurora'] .r-text-hero,
+html[data-style='aurora'] .r-text-h1,
+html[data-style='aurora'] .r-text-h2,
+html[data-style='aurora'] .r-text-data {
+  font-family: 'Sora', 'Inter', system-ui, sans-serif;
+  letter-spacing: -0.01em;
+}
+
 /* ── Utilities ── */
 .tabular-nums { font-variant-numeric: tabular-nums; }
 .glass {
@@ -132,6 +345,91 @@ input[type="range"]::-webkit-slider-thumb {
 }
 .dark .glass {
   background: rgba(19, 27, 46, 0.85); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+}
+
+/* ── Neobrutalism Theme (Comic Book Minimalism) ──
+ * Activated via <html data-style="neobrutalism">, set by ThemeContext.
+ * Pure token/CSS layer — no component logic changes.
+ */
+html[data-style='neobrutalism'] {
+  --color-bg-primary: #faf6ec;   /* warm comic paper */
+  --color-bg-secondary: #efe8d5;
+  --color-bg-card: #ffffff;
+  --color-text-primary: #111111; /* ink black */
+  --color-text-secondary: #5f594b;
+  --color-border-color: #111111; /* black outlines everywhere */
+  --color-accent: #ffd500;       /* comic yellow */
+  --color-accent-hover: #e6bf00;
+  --color-success: #16a34a;
+  --color-danger: #e11d48;
+}
+
+/* Inverted comic book — near-black paper, warm-white ink + white outlines */
+html[data-style='neobrutalism'].dark {
+  --color-bg-primary: #141418;
+  --color-bg-secondary: #1d1d23;
+  --color-bg-card: #22222a;
+  --color-text-primary: #f6f1e4;
+  --color-text-secondary: #a8a294;
+  --color-border-color: #f6f1e4;
+  --color-accent: #ffd500;
+  --color-accent-hover: #ffdf40;
+  --color-success: #4ade80;
+  --color-danger: #fb7185;
+}
+
+/* ── Cyberpunk Theme (Neon Grid) ── */
+html[data-style='cyberpunk'] {
+  --color-bg-primary: #eef4ff;   /* day-chrome cyan-white */
+  --color-bg-secondary: #e2ecff;
+  --color-bg-card: #ffffff;
+  --color-text-primary: #0b1220;
+  --color-text-secondary: #5b6b8c;
+  --color-border-color: #c9d6f2;
+  --color-accent: #0891b2;       /* neon cyan */
+  --color-accent-hover: #0e7490;
+  --color-success: #059669;
+  --color-danger: #e11d48;
+}
+
+html[data-style='cyberpunk'].dark {
+  --color-bg-primary: #070b18;   /* deep space */
+  --color-bg-secondary: #0d1428;
+  --color-bg-card: #111a33;
+  --color-text-primary: #e7f2ff;
+  --color-text-secondary: #7f93c4;
+  --color-border-color: #22315c;
+  --color-accent: #22d3ee;
+  --color-accent-hover: #67e8f9;
+  --color-success: #10b981;
+  --color-danger: #fb7185;
+}
+
+/* ── Aurora Theme (Frosted Glass) ── */
+html[data-style='aurora'] {
+  --color-bg-primary: #eef1ff;
+  --color-bg-secondary: #e6eaff;
+  --color-bg-card: #ffffff;
+  --color-text-primary: #1e1b4b;
+  --color-text-secondary: #6b7280;
+  --color-border-color: #e3e7f8;
+  --color-accent: #7c3aed;       /* violet */
+  --color-accent-hover: #6d28d9;
+  --color-success: #10b981;
+  --color-danger: #ef4444;
+}
+
+html[data-style='aurora'].dark {
+  --color-bg-primary: #0c0e1f;
+  --color-bg-secondary: #141732;
+  --color-bg-card: #1c2040;
+  --color-text-primary: #f5f6ff;
+  --color-text-secondary: #9aa3d8;
+  --color-border-color: #2a2f5c;
+  --color-accent: #a78bfa;
+  --color-accent-hover: #c4b5fd;
+  --color-success: #4ade80;
+  --color-danger: #fb7185;
 }
 
 /* ── Responsive Card ── */

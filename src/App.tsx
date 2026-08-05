@@ -51,7 +51,7 @@ function AppRouter() {
   return (
     <LayoutCtx.Provider value={layout}>
       <div
-        className="min-h-screen bg-bg-primary transition-all duration-300"
+        className="min-h-screen transition-all duration-300"
         style={{
           paddingLeft: contentPaddingLeft,
           paddingRight: contentPaddingRight,
