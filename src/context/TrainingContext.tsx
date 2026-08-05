@@ -21,6 +21,7 @@ import SplashScreen from '../components/SplashScreen'
 import { cloudRepository } from '../services/cloud/cloudRepository'
 import { cloudRealtime, type RealtimeChangePayload } from '../services/cloud/cloudRealtime'
 import { genId } from '../utils/id'
+import { useAuth } from './AuthContext'
 
 interface TrainingContextType {
   data: TrainingData
@@ -41,11 +42,11 @@ interface TrainingContextType {
   deleteLog: (id: string) => void
   toggleSubTopic: (subtopicId: string) => void
   toggleAssessment: (assessmentId: string) => void
-  restoreData: (next: TrainingData) => void
+  restoreData: (next: TrainingData) => Promise<void>
   recordEvent: (event: { type: string; entityType: string; entityId: string; payload: Record<string, unknown>; occurredAt: string }) => void
   resetSyllabusProgress: () => void
   resetLogs: () => void
-  resetData: () => void
+  resetData: () => Promise<void>
 }
 
 const TrainingContext = createContext<TrainingContextType | null>(null)
@@ -245,6 +246,7 @@ function recalcSubtopicHours(data: TrainingData, subtopicId: string): void {
 export function TrainingProvider({ children }: { children: ReactNode }) {
   const [data, setData] = useState<TrainingData | null>(null)
   const [ready, setReady] = useState(false)
+  const { snapshot: authSnapshot } = useAuth()
 
   // Initial Cloud Hydration at Startup
   const refreshFromCloud = useCallback(async () => {
@@ -257,9 +259,14 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  // Fix boot race: gate initial fetch on auth reaching a terminal state.
+  // 'loading' means the silent sign-in is still in flight — fetching now
+  // would call getSession() before the session is available on a cold boot,
+  // returning no uid and serving seed data that never updates post-sign-in.
   useEffect(() => {
+    if (authSnapshot.status === 'loading') return
     void refreshFromCloud()
-  }, [refreshFromCloud])
+  }, [authSnapshot.status, refreshFromCloud])
 
   // Realtime Live Cross-Device Synchronization — surgical in-memory patches
   useEffect(() => {
@@ -279,17 +286,37 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
 
     cloudRealtime.subscribe(handleRealtimePatch, handleReconnect)
 
-    const handleResume = () => {
+    // Web Page Visibility API — handles tab-switching and most backgrounding
+    const handleVisibilityResume = () => {
       if (document.visibilityState === 'visible') {
         cloudRealtime.subscribe(handleRealtimePatch, handleReconnect)
         void refreshFromCloud()
       }
     }
+    document.addEventListener('visibilitychange', handleVisibilityResume)
 
-    document.addEventListener('visibilitychange', handleResume)
+    // Native Capacitor App resume listener — belt-and-suspenders for Android:
+    // the Page Visibility handler dies if the OS fully reclaims the WebView
+    // process during extended backgrounding. The native listener survives that.
+    let removeCapacitorListener: (() => void) | null = null
+    void (async () => {
+      try {
+        const { App } = await import('@capacitor/app')
+        const listenerHandle = await App.addListener('appStateChange', ({ isActive }) => {
+          if (isActive) {
+            cloudRealtime.subscribe(handleRealtimePatch, handleReconnect)
+            void refreshFromCloud()
+          }
+        })
+        removeCapacitorListener = () => { void listenerHandle.remove() }
+      } catch {
+        // @capacitor/app not available in web/dev builds — no-op
+      }
+    })()
 
     return () => {
-      document.removeEventListener('visibilitychange', handleResume)
+      document.removeEventListener('visibilitychange', handleVisibilityResume)
+      removeCapacitorListener?.()
       cloudRealtime.unsubscribe()
     }
   }, [ready, refreshFromCloud])
@@ -686,18 +713,26 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
     })
   }, [])
 
-  const resetData = useCallback(() => {
+  const resetData = useCallback(async () => {
+    // Await the safety backup before proceeding — if it fails, the user is warned
+    // but the reset still proceeds rather than silently swallowing the failure.
     if (data) {
-      void cloudRepository.createBackup('pre-reset', data)
+      const backupOk = await cloudRepository.createBackup('pre-reset', data)
+      if (!backupOk) {
+        console.warn('[TrainingContext] Safety backup failed before resetData — proceeding anyway, but no backup exists.')
+      }
     }
-    void cloudRepository.resetUserData('all').then(() => {
-      void refreshFromCloud()
-    })
+    await cloudRepository.resetUserData('all')
+    void refreshFromCloud()
   }, [data, refreshFromCloud])
 
-  const restoreData = useCallback((next: TrainingData) => {
+  const restoreData = useCallback(async (next: TrainingData) => {
+    // Await the safety backup before applying the restore — same rationale as resetData.
     if (data) {
-      void cloudRepository.createBackup('pre-import', data)
+      const backupOk = await cloudRepository.createBackup('pre-import', data)
+      if (!backupOk) {
+        console.warn('[TrainingContext] Safety backup failed before restoreData — proceeding anyway, but no backup exists.')
+      }
     }
     setData(next)
     void cloudRepository.restoreSnapshot(next)

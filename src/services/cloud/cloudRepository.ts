@@ -402,7 +402,7 @@ export class CloudRepository {
         payload: data as unknown as Record<string, unknown>,
         size_bytes: sizeBytes,
         created_at: new Date().toISOString(),
-      })
+      }, { onConflict: 'user_id,name' })  // upsert on collision — same kind+day = update in place
 
       if (error) {
         console.error('[CloudRepository] createBackup error:', error.message)
@@ -489,13 +489,32 @@ export class CloudRepository {
         updated_at: new Date().toISOString(),
       }))
 
-      // Execute upserts in parallel batches
-      await Promise.all([
-        topicProgressRows.length > 0 ? client.from('topic_progress').upsert(topicProgressRows) : Promise.resolve(),
-        assessmentRows.length > 0 ? client.from('assessment_progress').upsert(assessmentRows) : Promise.resolve(),
-        dailyLogRows.length > 0 ? client.from('daily_logs').upsert(dailyLogRows) : Promise.resolve(),
-        studySessionRows.length > 0 ? client.from('study_sessions').upsert(studySessionRows) : Promise.resolve(),
+      // Execute upserts in parallel batches — check each result individually
+      // so a partial failure in one table is detected and reported.
+      const results = await Promise.allSettled([
+        topicProgressRows.length > 0 ? client.from('topic_progress').upsert(topicProgressRows) : Promise.resolve({ data: null, error: null }),
+        assessmentRows.length > 0 ? client.from('assessment_progress').upsert(assessmentRows) : Promise.resolve({ data: null, error: null }),
+        dailyLogRows.length > 0 ? client.from('daily_logs').upsert(dailyLogRows) : Promise.resolve({ data: null, error: null }),
+        studySessionRows.length > 0 ? client.from('study_sessions').upsert(studySessionRows) : Promise.resolve({ data: null, error: null }),
       ])
+
+      const tableNames = ['topic_progress', 'assessment_progress', 'daily_logs', 'study_sessions']
+      let anyFailed = false
+      for (let i = 0; i < results.length; i++) {
+        const result = results[i]
+        if (result.status === 'rejected') {
+          console.error(`[CloudRepository] restoreSnapshot: ${tableNames[i]} upsert threw:`, result.reason)
+          anyFailed = true
+        } else if (result.value && 'error' in result.value && result.value.error) {
+          console.error(`[CloudRepository] restoreSnapshot: ${tableNames[i]} upsert error:`, (result.value as { error: { message: string } }).error.message)
+          anyFailed = true
+        }
+      }
+
+      if (anyFailed) {
+        console.error('[CloudRepository] restoreSnapshot completed with one or more table failures — data may be partially restored.')
+        return false
+      }
 
       return true
     } catch (err) {
